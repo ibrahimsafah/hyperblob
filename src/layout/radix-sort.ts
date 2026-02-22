@@ -14,8 +14,16 @@ export class RadixSort {
   private histogramPipeline: GPUComputePipeline;
   private prefixSumPipeline: GPUComputePipeline;
   private scatterPipeline: GPUComputePipeline;
+  private bindGroupLayout: GPUBindGroupLayout;
 
   private maxNodeCount: number;
+
+  // Pre-allocated to avoid per-frame GC pressure
+  private paramsArray = new Uint32Array(4);
+
+  // Cached bind groups for even/odd passes (ping→pong vs pong→ping)
+  private evenBindGroup: GPUBindGroup | null = null;
+  private oddBindGroup: GPUBindGroup | null = null;
 
   constructor(device: GPUDevice, bufferManager: BufferManager, maxNodeCount: number) {
     this.device = device;
@@ -27,7 +35,7 @@ export class RadixSort {
       code: radixSortShader,
     });
 
-    const bindGroupLayout = device.createBindGroupLayout({
+    this.bindGroupLayout = device.createBindGroupLayout({
       label: 'radix-sort-bgl',
       entries: [
         { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
@@ -41,7 +49,7 @@ export class RadixSort {
 
     const pipelineLayout = device.createPipelineLayout({
       label: 'radix-sort-pipeline-layout',
-      bindGroupLayouts: [bindGroupLayout],
+      bindGroupLayouts: [this.bindGroupLayout],
     });
 
     this.histogramPipeline = device.createComputePipeline({
@@ -79,6 +87,41 @@ export class RadixSort {
     this.bufferManager.createBuffer('sort-vals-pong', bufferSize, usage, 'sort-vals-pong');
     this.bufferManager.createBuffer('sort-histograms', Math.max(histogramSize, 4), usage, 'sort-histograms');
     this.bufferManager.createBuffer('sort-params', 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'sort-params');
+
+    // Rebuild cached bind groups when buffers change
+    this.rebuildBindGroups(numWorkgroups);
+  }
+
+  private rebuildBindGroups(numWorkgroups: number): void {
+    const histSize = 256 * numWorkgroups * 4;
+
+    // Even passes: read ping → write pong
+    this.evenBindGroup = this.device.createBindGroup({
+      label: 'radix-sort-bg-even',
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('sort-keys-ping') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('sort-vals-ping') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('sort-keys-pong') } },
+        { binding: 3, resource: { buffer: this.bufferManager.getBuffer('sort-vals-pong') } },
+        { binding: 4, resource: { buffer: this.bufferManager.getBuffer('sort-histograms'), size: Math.max(histSize, 4) } },
+        { binding: 5, resource: { buffer: this.bufferManager.getBuffer('sort-params') } },
+      ],
+    });
+
+    // Odd passes: read pong → write ping
+    this.oddBindGroup = this.device.createBindGroup({
+      label: 'radix-sort-bg-odd',
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('sort-keys-pong') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('sort-vals-pong') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('sort-keys-ping') } },
+        { binding: 3, resource: { buffer: this.bufferManager.getBuffer('sort-vals-ping') } },
+        { binding: 4, resource: { buffer: this.bufferManager.getBuffer('sort-histograms'), size: Math.max(histSize, 4) } },
+        { binding: 5, resource: { buffer: this.bufferManager.getBuffer('sort-params') } },
+      ],
+    });
   }
 
   /**
@@ -111,37 +154,21 @@ export class RadixSort {
       nodeCount * 4,
     );
 
+    const histBuffer = this.bufferManager.getBuffer('sort-histograms');
+
     // 4 passes for 32-bit keys (8 bits per pass)
     for (let pass = 0; pass < 4; pass++) {
       const bitOffset = pass * 8;
-      const isEvenPass = pass % 2 === 0;
 
-      const keysIn = isEvenPass ? 'sort-keys-ping' : 'sort-keys-pong';
-      const valsIn = isEvenPass ? 'sort-vals-ping' : 'sort-vals-pong';
-      const keysOut = isEvenPass ? 'sort-keys-pong' : 'sort-keys-ping';
-      const valsOut = isEvenPass ? 'sort-vals-pong' : 'sort-vals-ping';
+      // Upload params for this pass (reuse pre-allocated array)
+      this.paramsArray[0] = nodeCount;
+      this.paramsArray[1] = bitOffset;
+      this.device.queue.writeBuffer(this.bufferManager.getBuffer('sort-params'), 0, this.paramsArray);
 
-      // Upload params for this pass
-      const paramsData = new Uint32Array([nodeCount, bitOffset, 0, 0]);
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('sort-params'), 0, paramsData);
+      // Clear histogram buffer on GPU (no CPU allocation needed)
+      encoder.clearBuffer(histBuffer);
 
-      // Clear histogram buffer
-      const histSize = 256 * numWorkgroups * 4;
-      const clearData = new Uint32Array(256 * numWorkgroups);
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('sort-histograms'), 0, clearData);
-
-      const bindGroup = this.device.createBindGroup({
-        label: `radix-sort-bg-pass${pass}`,
-        layout: this.histogramPipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer(keysIn) } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer(valsIn) } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer(keysOut) } },
-          { binding: 3, resource: { buffer: this.bufferManager.getBuffer(valsOut) } },
-          { binding: 4, resource: { buffer: this.bufferManager.getBuffer('sort-histograms'), size: Math.max(histSize, 4) } },
-          { binding: 5, resource: { buffer: this.bufferManager.getBuffer('sort-params') } },
-        ],
-      });
+      const bindGroup = pass % 2 === 0 ? this.evenBindGroup! : this.oddBindGroup!;
 
       // Pass 1: Histogram
       const histPass = encoder.beginComputePass({ label: `radix-histogram-${pass}` });
