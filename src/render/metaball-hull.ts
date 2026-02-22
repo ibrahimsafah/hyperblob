@@ -180,20 +180,23 @@ export function marchingSquares(grid: ScalarGrid, threshold: number): Segment[] 
 
 // ── Contour stitching ──
 
+// Integer hash: pack quantized x,y into a single number (no string allocation)
+// Uses a large prime multiplier to reduce collisions
 const HASH_PRECISION = 1e4;
+const HASH_PRIME = 100003;
 
-function hashPoint(p: Vec2): string {
-  return `${Math.round(p[0] * HASH_PRECISION)},${Math.round(p[1] * HASH_PRECISION)}`;
+function hashPointInt(p: Vec2): number {
+  return Math.round(p[0] * HASH_PRECISION) * HASH_PRIME + Math.round(p[1] * HASH_PRECISION);
 }
 
 export function stitchContours(segments: Segment[]): Vec2[][] {
   if (segments.length === 0) return [];
 
-  // Build adjacency: endpoint → list of segment indices
-  const adj = new Map<string, number[]>();
+  // Build adjacency: integer key → list of segment indices
+  const adj = new Map<number, number[]>();
   for (let i = 0; i < segments.length; i++) {
     for (const pt of segments[i]) {
-      const key = hashPoint(pt);
+      const key = hashPointInt(pt);
       const list = adj.get(key);
       if (list) list.push(i);
       else adj.set(key, [i]);
@@ -212,7 +215,7 @@ export function stitchContours(segments: Segment[]): Vec2[][] {
     // Walk forward from end of chain
     let maxIter = segments.length;
     while (maxIter-- > 0) {
-      const endKey = hashPoint(chain[chain.length - 1]);
+      const endKey = hashPointInt(chain[chain.length - 1]);
       const neighbors = adj.get(endKey);
       if (!neighbors) break;
 
@@ -221,8 +224,8 @@ export function stitchContours(segments: Segment[]): Vec2[][] {
         if (used[idx]) continue;
         used[idx] = 1;
         const seg = segments[idx];
-        const h0 = hashPoint(seg[0]);
-        const h1 = hashPoint(seg[1]);
+        const h0 = hashPointInt(seg[0]);
+        const h1 = hashPointInt(seg[1]);
 
         if (h0 === endKey) {
           chain.push(seg[1]);
@@ -236,8 +239,8 @@ export function stitchContours(segments: Segment[]): Vec2[][] {
     }
 
     // Check if chain is closed (start ≈ end)
-    const startKey = hashPoint(chain[0]);
-    const lastKey = hashPoint(chain[chain.length - 1]);
+    const startKey = hashPointInt(chain[0]);
+    const lastKey = hashPointInt(chain[chain.length - 1]);
     if (startKey === lastKey && chain.length > 2) {
       chain.pop(); // remove duplicate closing point
     }
@@ -384,19 +387,43 @@ export function earClipTriangulate(polygon: Vec2[]): Vec2[] {
 export function chaikinSmooth(vertices: Vec2[], iterations: number): Vec2[] {
   if (iterations <= 0 || vertices.length < 3) return vertices;
 
-  let current = vertices;
-  for (let iter = 0; iter < iterations; iter++) {
-    const next: Vec2[] = [];
-    const n = current.length;
-    for (let i = 0; i < n; i++) {
-      const a = current[i];
-      const b = current[(i + 1) % n];
-      next.push([0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]]);
-      next.push([0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]);
-    }
-    current = next;
+  const n0 = vertices.length;
+  // Pre-allocate for the final iteration size: n * 2^iterations
+  const finalN = n0 * (1 << iterations);
+  // Double-buffer: alternate between two flat Float32Arrays
+  let src = new Float32Array(finalN * 2);
+  let dst = new Float32Array(finalN * 2);
+
+  // Pack input vertices into src
+  for (let i = 0; i < n0; i++) {
+    src[i * 2] = vertices[i][0];
+    src[i * 2 + 1] = vertices[i][1];
   }
-  return current;
+
+  let count = n0;
+  for (let iter = 0; iter < iterations; iter++) {
+    const newCount = count * 2;
+    for (let i = 0; i < count; i++) {
+      const j = ((i + 1) % count);
+      const ax = src[i * 2], ay = src[i * 2 + 1];
+      const bx = src[j * 2], by = src[j * 2 + 1];
+      const out = i * 4;
+      dst[out]     = 0.75 * ax + 0.25 * bx;
+      dst[out + 1] = 0.75 * ay + 0.25 * by;
+      dst[out + 2] = 0.25 * ax + 0.75 * bx;
+      dst[out + 3] = 0.25 * ay + 0.75 * by;
+    }
+    count = newCount;
+    // Swap buffers
+    const tmp = src; src = dst; dst = tmp;
+  }
+
+  // Unpack to Vec2[] for downstream compatibility
+  const result: Vec2[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    result[i] = [src[i * 2], src[i * 2 + 1]];
+  }
+  return result;
 }
 
 // ── MST Bridge Fields (connectivity guarantee) ──

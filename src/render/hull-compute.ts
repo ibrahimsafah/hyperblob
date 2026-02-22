@@ -68,19 +68,38 @@ function convexHull(points: Vec2[]): Vec2[] {
 function chaikinSmooth(vertices: Vec2[], iterations: number): Vec2[] {
   if (iterations <= 0 || vertices.length < 3) return vertices;
 
-  let current = vertices;
-  for (let iter = 0; iter < iterations; iter++) {
-    const next: Vec2[] = [];
-    const n = current.length;
-    for (let i = 0; i < n; i++) {
-      const a = current[i];
-      const b = current[(i + 1) % n];
-      next.push([0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]]);
-      next.push([0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]);
-    }
-    current = next;
+  const n0 = vertices.length;
+  const finalN = n0 * (1 << iterations);
+  let src = new Float32Array(finalN * 2);
+  let dst = new Float32Array(finalN * 2);
+
+  for (let i = 0; i < n0; i++) {
+    src[i * 2] = vertices[i][0];
+    src[i * 2 + 1] = vertices[i][1];
   }
-  return current;
+
+  let count = n0;
+  for (let iter = 0; iter < iterations; iter++) {
+    const newCount = count * 2;
+    for (let i = 0; i < count; i++) {
+      const j = ((i + 1) % count);
+      const ax = src[i * 2], ay = src[i * 2 + 1];
+      const bx = src[j * 2], by = src[j * 2 + 1];
+      const out = i * 4;
+      dst[out]     = 0.75 * ax + 0.25 * bx;
+      dst[out + 1] = 0.75 * ay + 0.25 * by;
+      dst[out + 2] = 0.25 * ax + 0.75 * bx;
+      dst[out + 3] = 0.25 * ay + 0.75 * by;
+    }
+    count = newCount;
+    const tmp = src; src = dst; dst = tmp;
+  }
+
+  const result: Vec2[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    result[i] = [src[i * 2], src[i * 2 + 1]];
+  }
+  return result;
 }
 
 // ── Helpers ──
@@ -105,6 +124,16 @@ function fanTriangulate(centroid: Vec2, hull: Vec2[]): Vec2[] {
   return triangles;
 }
 
+// Precomputed unit circle offsets for 8-segment disc padding (eliminates trig in hot loop)
+const DISC_SEGMENTS = 8;
+const DISC_COS = new Float64Array(DISC_SEGMENTS);
+const DISC_SIN = new Float64Array(DISC_SEGMENTS);
+for (let i = 0; i < DISC_SEGMENTS; i++) {
+  const angle = (Math.PI * 2 * i) / DISC_SEGMENTS;
+  DISC_COS[i] = Math.cos(angle);
+  DISC_SIN[i] = Math.sin(angle);
+}
+
 /**
  * Pad each point with circle-offset points, then compute convex hull.
  * This is equivalent to the Minkowski sum of the point set with a disc,
@@ -112,13 +141,11 @@ function fanTriangulate(centroid: Vec2, hull: Vec2[]): Vec2[] {
  */
 function paddedConvexHull(points: Vec2[], margin: number): Vec2[] {
   const padded: Vec2[] = [];
-  const segments = 8;
   for (const p of points) {
-    for (let a = 0; a < segments; a++) {
-      const angle = (Math.PI * 2 * a) / segments;
+    for (let a = 0; a < DISC_SEGMENTS; a++) {
       padded.push([
-        p[0] + margin * Math.cos(angle),
-        p[1] + margin * Math.sin(angle),
+        p[0] + margin * DISC_COS[a],
+        p[1] + margin * DISC_SIN[a],
       ]);
     }
   }
