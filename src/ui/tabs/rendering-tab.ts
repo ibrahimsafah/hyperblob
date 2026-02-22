@@ -1,5 +1,5 @@
-import type { RenderParams } from '../../data/types';
-import { createSlider, createToggle, createColorPresets, createSectionHeader } from '../controls';
+import type { RenderParams, HullMode } from '../../data/types';
+import { createSlider, createToggle, createColorPresets, createSectionHeader, createSelect } from '../controls';
 
 export function createRenderingTab(renderParams: RenderParams): HTMLElement {
   const tab = document.createElement('div');
@@ -17,6 +17,12 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     onChange: (v) => { renderParams.nodeBaseSize = v; },
   }));
 
+  tab.appendChild(createToggle({
+    label: 'Dark Nodes',
+    value: renderParams.nodeDarkMode,
+    onChange: (v) => { renderParams.nodeDarkMode = v; },
+  }));
+
   // -- Edges section --
   tab.appendChild(createSectionHeader('Edges'));
 
@@ -32,10 +38,29 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
   // -- Hulls section --
   tab.appendChild(createSectionHeader('Hulls'));
 
+  tab.appendChild(createSelect({
+    label: 'Hull Mode',
+    options: [
+      { value: 'convex', label: 'Convex' },
+      { value: 'metaball', label: 'Metaball' },
+    ],
+    value: renderParams.hullMode,
+    onChange: (v) => { renderParams.hullMode = v as HullMode; },
+  }));
+
+  tab.appendChild(createSlider({
+    label: 'Blob Threshold',
+    min: 0.1,
+    max: 1.5,
+    step: 0.05,
+    value: renderParams.hullMetaballThreshold,
+    onChange: (v) => { renderParams.hullMetaballThreshold = v; },
+  }));
+
   tab.appendChild(createSlider({
     label: 'Hull Alpha',
     min: 0,
-    max: 0.5,
+    max: 0.8,
     step: 0.01,
     value: renderParams.hullAlpha,
     onChange: (v) => { renderParams.hullAlpha = v; },
@@ -44,10 +69,19 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
   tab.appendChild(createSlider({
     label: 'Hull Margin',
     min: 0,
-    max: 50,
+    max: 80,
     step: 1,
     value: renderParams.hullMargin,
     onChange: (v) => { renderParams.hullMargin = v; },
+  }));
+
+  tab.appendChild(createSlider({
+    label: 'Hull Smoothing',
+    min: 0,
+    max: 5,
+    step: 1,
+    value: renderParams.hullSmoothing,
+    onChange: (v) => { renderParams.hullSmoothing = v; },
   }));
 
   tab.appendChild(createToggle({

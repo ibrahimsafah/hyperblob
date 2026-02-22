@@ -56,11 +56,11 @@ test.describe('Convex Hulls', () => {
       return app.getRenderParams().hullMargin;
     });
 
-    // Default hull margin should be 12
-    expect(hullMargin).toBe(12);
+    // Default hull margin should be 3
+    expect(hullMargin).toBe(3);
   });
 
-  test('hull outline parameter is enabled by default', async ({ page }) => {
+  test('hull outline parameter is disabled by default', async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(
       () => {
@@ -75,7 +75,7 @@ test.describe('Convex Hulls', () => {
       return app.getRenderParams().hullOutline;
     });
 
-    expect(hullOutline).toBe(true);
+    expect(hullOutline).toBe(false);
   });
 
   test('rendering continues without errors with hulls enabled', async ({ page }) => {

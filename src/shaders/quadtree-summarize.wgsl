@@ -80,7 +80,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   tree[node_base + 1u] = com_y;
   tree[node_base + 2u] = total_mass;
   tree[node_base + 3u] = cell_size;
-  tree[node_base + 4u] = bitcast<f32>(0xFFFFFFFFu); // internal node marker
+  tree[node_base + 4u] = -1.0; // internal node marker (negative = not a leaf)
   tree[node_base + 5u] = f32(child_mask);
   tree[node_base + 6u] = select(0.0, min_x, total_mass > 0.0);
   tree[node_base + 7u] = select(0.0, min_y, total_mass > 0.0);

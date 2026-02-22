@@ -1,16 +1,26 @@
 import type { Camera } from '../render/camera';
 
+export interface NodeDragCallbacks {
+  hitTest(worldX: number, worldY: number): number | null;
+  onDragStart(nodeIndex: number): void;
+  onDrag(nodeIndex: number, worldX: number, worldY: number): void;
+  onDragEnd(nodeIndex: number): void;
+}
+
 export class InputHandler {
   private canvas: HTMLCanvasElement;
   private camera: Camera;
   private dragging = false;
+  private draggedNode: number | null = null;
+  private nodeDrag: NodeDragCallbacks | null;
   private lastTouchDist = 0;
   private lastTouchCenter: [number, number] = [0, 0];
   private boundHandlers: Array<[string, EventListener, EventListenerOptions?]> = [];
 
-  constructor(canvas: HTMLCanvasElement, camera: Camera) {
+  constructor(canvas: HTMLCanvasElement, camera: Camera, nodeDrag?: NodeDragCallbacks) {
     this.canvas = canvas;
     this.camera = camera;
+    this.nodeDrag = nodeDrag ?? null;
     this.attachListeners();
   }
 
@@ -25,24 +35,57 @@ export class InputHandler {
       this.boundHandlers.push([type, wrapped, opts]);
     };
 
-    // Mouse drag to pan
+    // Mouse drag to pan (or drag node)
     on('mousedown', (e: MouseEvent) => {
       if (e.button === 0) {
+        // Try node hit test first
+        if (this.nodeDrag) {
+          const dpr = window.devicePixelRatio || 1;
+          const [wx, wy] = this.camera.screenToWorld(e.offsetX * dpr, e.offsetY * dpr);
+          const nodeIndex = this.nodeDrag.hitTest(wx, wy);
+          if (nodeIndex !== null) {
+            this.draggedNode = nodeIndex;
+            this.nodeDrag.onDragStart(nodeIndex);
+            this.canvas.style.cursor = 'grabbing';
+            return;
+          }
+        }
         this.dragging = true;
       }
     });
 
     on('mousemove', (e: MouseEvent) => {
-      if (this.dragging) {
-        this.camera.pan(e.movementX, e.movementY);
+      if (this.draggedNode !== null && this.nodeDrag) {
+        const dpr = window.devicePixelRatio || 1;
+        const [wx, wy] = this.camera.screenToWorld(e.offsetX * dpr, e.offsetY * dpr);
+        this.nodeDrag.onDrag(this.draggedNode, wx, wy);
+      } else if (this.dragging) {
+        const dpr = window.devicePixelRatio || 1;
+        this.camera.pan(e.movementX * dpr, e.movementY * dpr);
+      } else if (this.nodeDrag) {
+        // Hover cursor feedback
+        const dpr = window.devicePixelRatio || 1;
+        const [wx, wy] = this.camera.screenToWorld(e.offsetX * dpr, e.offsetY * dpr);
+        const nodeIndex = this.nodeDrag.hitTest(wx, wy);
+        this.canvas.style.cursor = nodeIndex !== null ? 'grab' : '';
       }
     });
 
-    on('mouseup', (_e: MouseEvent) => {
+    on('mouseup', () => {
+      if (this.draggedNode !== null && this.nodeDrag) {
+        this.nodeDrag.onDragEnd(this.draggedNode);
+        this.draggedNode = null;
+        this.canvas.style.cursor = '';
+      }
       this.dragging = false;
     });
 
-    on('mouseleave', (_e: MouseEvent) => {
+    on('mouseleave', () => {
+      if (this.draggedNode !== null && this.nodeDrag) {
+        this.nodeDrag.onDragEnd(this.draggedNode);
+        this.draggedNode = null;
+        this.canvas.style.cursor = '';
+      }
       this.dragging = false;
     });
 
@@ -50,7 +93,8 @@ export class InputHandler {
     on('wheel', (e: WheelEvent) => {
       e.preventDefault();
       const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      this.camera.zoomAt(e.offsetX, e.offsetY, factor);
+      const dpr = window.devicePixelRatio || 1;
+      this.camera.zoomAt(e.offsetX * dpr, e.offsetY * dpr, factor);
     }, { passive: false });
 
     // Touch: single-touch pan, pinch-to-zoom
@@ -71,7 +115,8 @@ export class InputHandler {
       if (e.touches.length === 1 && this.dragging) {
         const dx = e.touches[0].clientX - this.lastTouchCenter[0];
         const dy = e.touches[0].clientY - this.lastTouchCenter[1];
-        this.camera.pan(dx, dy);
+        const dpr = window.devicePixelRatio || 1;
+        this.camera.pan(dx * dpr, dy * dpr);
         this.lastTouchCenter = [e.touches[0].clientX, e.touches[0].clientY];
       } else if (e.touches.length === 2) {
         const dist = this.touchDistance(e.touches[0], e.touches[1]);
@@ -80,15 +125,17 @@ export class InputHandler {
 
         if (this.lastTouchDist > 0) {
           const factor = dist / this.lastTouchDist;
-          const sx = center[0] - rect.left;
-          const sy = center[1] - rect.top;
+          const dpr = window.devicePixelRatio || 1;
+          const sx = (center[0] - rect.left) * dpr;
+          const sy = (center[1] - rect.top) * dpr;
           this.camera.zoomAt(sx, sy, factor);
         }
 
         // Also pan with two-finger drag
+        const dprP = window.devicePixelRatio || 1;
         const dx = center[0] - this.lastTouchCenter[0];
         const dy = center[1] - this.lastTouchCenter[1];
-        this.camera.pan(dx, dy);
+        this.camera.pan(dx * dprP, dy * dprP);
 
         this.lastTouchDist = dist;
         this.lastTouchCenter = center;

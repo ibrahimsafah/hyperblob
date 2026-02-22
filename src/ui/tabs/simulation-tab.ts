@@ -144,5 +144,21 @@ export function createSimulationTab(
     onChange: (v) => { simParams.alphaDecay = v; },
   }));
 
+  tab.appendChild(createSlider({
+    label: 'Alpha Target',
+    min: 0,
+    max: 0.1,
+    step: 0.005,
+    value: simParams.alphaTarget,
+    onChange: (v) => {
+      simParams.alphaTarget = v;
+      // If alpha already settled below new target, bump it up
+      if (simParams.alpha < v) {
+        simParams.alpha = v;
+        simParams.running = true;
+      }
+    },
+  }));
+
   return tab;
 }

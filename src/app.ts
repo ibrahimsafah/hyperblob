@@ -18,6 +18,15 @@ export class App {
   private graphData: HypergraphData | null = null;
   private nodeCount = 0;
 
+  // Node drag state
+  private cpuPositions: Float32Array | null = null;
+  private cpuPositionsPending = false;
+  private positionCacheCounter = 0;
+  private draggedNodeIndex: number | null = null;
+  private dragTargetPos: [number, number] | null = null;   // raw cursor world pos
+  private dragSmoothPos: [number, number] | null = null;   // lerped position written to GPU
+  private dragPrevPos: [number, number] | null = null;     // previous frame (for release velocity)
+
   // Render pipeline state
   private nodeRenderPipeline: GPURenderPipeline | null = null;
   private nodeBindGroup: GPUBindGroup | null = null;
@@ -76,10 +85,49 @@ export class App {
     // Create node render pipeline
     this.createNodePipeline();
 
-    // Setup input handler
+    // Setup input handler with node drag support
     if (this.modules.inputHandler) {
       const { InputHandler } = this.modules.inputHandler;
-      this.instances.inputHandler = new InputHandler(this.gpu.canvas, this.camera);
+      this.instances.inputHandler = new InputHandler(this.gpu.canvas, this.camera, {
+        hitTest: (wx: number, wy: number) => this.hitTestNode(wx, wy),
+        onDragStart: (nodeIndex: number) => {
+          this.draggedNodeIndex = nodeIndex;
+          // Initialize smooth position to the node's current position
+          if (this.cpuPositions) {
+            const x = this.cpuPositions[nodeIndex * 4];
+            const y = this.cpuPositions[nodeIndex * 4 + 1];
+            this.dragSmoothPos = [x, y];
+            this.dragTargetPos = [x, y];
+            this.dragPrevPos = [x, y];
+          }
+          // Gentle reheat — just enough for neighbors to react without global jitter
+          if (this.simParams.alpha < 0.08) {
+            this.simParams.alpha = 0.08;
+          }
+          this.simParams.running = true;
+        },
+        onDrag: (_nodeIndex: number, wx: number, wy: number) => {
+          this.dragTargetPos = [wx, wy];
+          // Keep CPU cache in sync for the dragged node
+          if (this.cpuPositions && this.draggedNodeIndex !== null) {
+            this.cpuPositions[this.draggedNodeIndex * 4] = wx;
+            this.cpuPositions[this.draggedNodeIndex * 4 + 1] = wy;
+          }
+        },
+        onDragEnd: () => {
+          // Impart momentum on release for natural deceleration
+          if (this.draggedNodeIndex !== null && this.dragSmoothPos && this.dragPrevPos && this.buffers.hasBuffer('node-positions')) {
+            const vx = (this.dragSmoothPos[0] - this.dragPrevPos[0]) * 4;
+            const vy = (this.dragSmoothPos[1] - this.dragPrevPos[1]) * 4;
+            const data = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], vx, vy]);
+            this.buffers.uploadData('node-positions', data, this.draggedNodeIndex * 16);
+          }
+          this.draggedNodeIndex = null;
+          this.dragTargetPos = null;
+          this.dragSmoothPos = null;
+          this.dragPrevPos = null;
+        },
+      });
     }
 
     // Setup panel
@@ -206,6 +254,9 @@ export class App {
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, 'node-positions');
     this.buffers.uploadData('node-positions', positions);
 
+    // Initialize CPU position cache for hit testing
+    this.cpuPositions = new Float32Array(positions);
+
     // Upload metadata: [group, flags] per node
     const metadata = new Uint32Array(data.nodes.length * 2);
     for (let i = 0; i < data.nodes.length; i++) {
@@ -236,6 +287,9 @@ export class App {
     }
     if (this.modules.hullRenderer && !this.instances.hullRenderer) {
       this.instances.hullRenderer = new this.modules.hullRenderer.HullRenderer(this.gpu, this.buffers, this.camera);
+    }
+    if (this.instances.hullRenderer) {
+      this.instances.hullRenderer.setData(data);
     }
 
     // Setup force simulation
@@ -289,7 +343,7 @@ export class App {
   private async loadDefaultDataset(): Promise<void> {
     if (!this.modules.hifLoader) return;
     try {
-      const response = await fetch('/data/got.json');
+      const response = await fetch('/data/small-test.json');
       if (!response.ok) return;
       const json = await response.json();
       const data = this.modules.hifLoader.parseHIF(json);
@@ -334,10 +388,48 @@ export class App {
   private tick = (): void => {
     if (this.disposed || !this.running) return;
 
+    // Keep simulation gently warm during node drag (low alpha = subtle neighbor movement)
+    if (this.draggedNodeIndex !== null && this.simParams.alpha < 0.08) {
+      this.simParams.alpha = 0.08;
+      this.simParams.running = true;
+    }
+
+    // Write dragged node position BEFORE simulation so GPU forces read the correct position
+    if (this.draggedNodeIndex !== null && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
+      const pre = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], 0, 0]);
+      this.buffers.uploadData('node-positions', pre, this.draggedNodeIndex * 16);
+    }
+
     // Update simulation
     if (this.simulation && this.simParams.running && this.simParams.alpha > this.simParams.alphaMin) {
       this.simulation.tick(this.simParams);
       this.simParams.alpha += (this.simParams.alphaTarget - this.simParams.alpha) * this.simParams.alphaDecay;
+    }
+
+    // Lerp dragged node toward cursor target (smooths out discrete mouse events)
+    if (this.draggedNodeIndex !== null && this.dragTargetPos && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
+      this.dragPrevPos = [this.dragSmoothPos[0], this.dragSmoothPos[1]];
+      const t = 0.55; // lerp factor: tight tracking with jitter smoothing at 120fps
+      this.dragSmoothPos[0] += (this.dragTargetPos[0] - this.dragSmoothPos[0]) * t;
+      this.dragSmoothPos[1] += (this.dragTargetPos[1] - this.dragSmoothPos[1]) * t;
+      const data = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], 0, 0]);
+      this.buffers.uploadData('node-positions', data, this.draggedNodeIndex * 16);
+    }
+
+    // Periodically update CPU position cache for hit testing
+    this.positionCacheCounter++;
+    if (this.positionCacheCounter >= 10 && this.nodeCount > 0 && !this.cpuPositionsPending && this.buffers.hasBuffer('node-positions')) {
+      this.positionCacheCounter = 0;
+      this.cpuPositionsPending = true;
+      this.buffers.readBuffer('node-positions', this.nodeCount * 16).then(data => {
+        this.cpuPositions = data;
+        this.cpuPositionsPending = false;
+      });
+    }
+
+    // Force hull recompute every frame while simulation has energy or during drag
+    if (this.instances.hullRenderer && (this.draggedNodeIndex !== null || this.simParams.alpha > 0.05)) {
+      this.instances.hullRenderer.forceRecompute();
     }
 
     this.render();
@@ -360,7 +452,7 @@ export class App {
         this.renderParams.nodeBaseSize,
         this.camera.getViewportWidth(),
         this.camera.getViewportHeight(),
-        0, // pad
+        this.renderParams.nodeDarkMode ? 1.0 : 0.0,
       ]);
       device.queue.writeBuffer(this.paramsBuffer, 0, data);
     }
@@ -422,6 +514,26 @@ export class App {
   getRenderParams(): RenderParams { return this.renderParams; }
   getNodeCount(): number { return this.nodeCount; }
   getGraphData(): HypergraphData | null { return this.graphData; }
+
+  private hitTestNode(worldX: number, worldY: number): number | null {
+    if (!this.cpuPositions || this.nodeCount === 0) return null;
+    // Convert pixel-space node size to world-space radius, with extra margin for easier clicking
+    const hitRadius = (this.renderParams.nodeBaseSize * 1.5) / this.camera.zoom;
+    let bestDist = hitRadius;
+    let bestIndex: number | null = null;
+    for (let i = 0; i < this.nodeCount; i++) {
+      const nx = this.cpuPositions[i * 4];
+      const ny = this.cpuPositions[i * 4 + 1];
+      const dx = worldX - nx;
+      const dy = worldY - ny;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
 
   dispose(): void {
     this.disposed = true;

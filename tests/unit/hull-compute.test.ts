@@ -83,23 +83,28 @@ describe('HullCompute', () => {
     expect(hulls).toBeDefined();
   });
 
-  it('handles single point (returns empty or skips)', () => {
+  it('singleton generates a circle', () => {
     const positions = makePositions([[5, 5]]);
     const edges = [makeEdge(0, [0])];
-    const hulls = hullCompute.computeHulls(positions, edges, 0);
-    // Single point — less than 3 members, so skipped
-    expect(hulls).toHaveLength(0);
+    const hulls = hullCompute.computeHulls(positions, edges, 10);
+    expect(hulls).toHaveLength(1);
+    expect(hulls[0].vertices.length).toBeGreaterThanOrEqual(12);
+    expect(hulls[0].centroid[0]).toBeCloseTo(5, 1);
+    expect(hulls[0].centroid[1]).toBeCloseTo(5, 1);
+    expect(hulls[0].triangles.length).toBeGreaterThan(0);
   });
 
-  it('handles two points (returns empty or skips)', () => {
+  it('two points generates a capsule', () => {
     const positions = makePositions([
       [0, 0],
       [10, 0],
     ]);
     const edges = [makeEdge(0, [0, 1])];
-    const hulls = hullCompute.computeHulls(positions, edges, 0);
-    // Two points — less than 3 members, so skipped
-    expect(hulls).toHaveLength(0);
+    const hulls = hullCompute.computeHulls(positions, edges, 5);
+    expect(hulls).toHaveLength(1);
+    expect(hulls[0].vertices.length).toBeGreaterThanOrEqual(10);
+    expect(hulls[0].centroid[0]).toBeCloseTo(5, 1);
+    expect(hulls[0].centroid[1]).toBeCloseTo(0, 1);
   });
 
   it('handles duplicate points correctly', () => {
@@ -165,14 +170,14 @@ describe('HullCompute', () => {
     ]);
     const edges = [makeEdge(0, [0, 1, 2])];
 
-    const hullsNoMargin = hullCompute.computeHulls(positions, edges, 0);
-    const hullsWithMargin = hullCompute.computeHulls(positions, edges, 5);
+    const hullsSmallMargin = hullCompute.computeHulls(positions, edges, 5);
+    const hullsLargeMargin = hullCompute.computeHulls(positions, edges, 15);
 
-    if (hullsNoMargin.length > 0 && hullsWithMargin.length > 0) {
-      const areaNoMargin = computeHullAreaFromVec2(hullsNoMargin[0].vertices as [number, number][]);
-      const areaWithMargin = computeHullAreaFromVec2(hullsWithMargin[0].vertices as [number, number][]);
+    if (hullsSmallMargin.length > 0 && hullsLargeMargin.length > 0) {
+      const areaSmall = computeHullAreaFromVec2(hullsSmallMargin[0].vertices as [number, number][]);
+      const areaLarge = computeHullAreaFromVec2(hullsLargeMargin[0].vertices as [number, number][]);
 
-      expect(areaWithMargin).toBeGreaterThan(areaNoMargin);
+      expect(areaLarge).toBeGreaterThan(areaSmall);
     }
   });
 
@@ -192,6 +197,72 @@ describe('HullCompute', () => {
     const hulls = hullCompute.computeHulls(positions, edges, 0);
 
     expect(hulls).toHaveLength(2);
+  });
+
+  it('Chaikin smoothing produces more vertices', () => {
+    const positions = makePositions([
+      [0, 0],
+      [10, 0],
+      [5, 10],
+    ]);
+    const edges = [makeEdge(0, [0, 1, 2])];
+
+    const hullsNoSmooth = hullCompute.computeHulls(positions, edges, 5, 0);
+    const hullsSmooth = hullCompute.computeHulls(positions, edges, 5, 3);
+
+    expect(hullsNoSmooth).toHaveLength(1);
+    expect(hullsSmooth).toHaveLength(1);
+    expect(hullsSmooth[0].vertices.length).toBeGreaterThan(hullsNoSmooth[0].vertices.length);
+  });
+
+  it('Chaikin doubles vertex count per iteration', () => {
+    const positions = makePositions([
+      [0, 0],
+      [10, 0],
+      [10, 10],
+      [0, 10],
+    ]);
+    const edges = [makeEdge(0, [0, 1, 2, 3])];
+
+    const hulls0 = hullCompute.computeHulls(positions, edges, 5, 0);
+    const hulls1 = hullCompute.computeHulls(positions, edges, 5, 1);
+    const hulls2 = hullCompute.computeHulls(positions, edges, 5, 2);
+
+    const n0 = hulls0[0].vertices.length;
+    const n1 = hulls1[0].vertices.length;
+    const n2 = hulls2[0].vertices.length;
+
+    // Each iteration doubles the vertex count
+    expect(n1).toBe(n0 * 2);
+    expect(n2).toBe(n1 * 2);
+  });
+
+  it('zero smoothing iterations returns original vertices', () => {
+    const positions = makePositions([
+      [0, 0],
+      [10, 0],
+      [5, 10],
+    ]);
+    const edges = [makeEdge(0, [0, 1, 2])];
+
+    const hullsDefault = hullCompute.computeHulls(positions, edges, 5);
+    const hullsZero = hullCompute.computeHulls(positions, edges, 5, 0);
+
+    // Default (no 4th arg) and explicit 0 should produce same vertex count
+    expect(hullsDefault[0].vertices.length).toBe(hullsZero[0].vertices.length);
+  });
+
+  it('capsule for 2-member edge has correct centroid', () => {
+    const positions = makePositions([
+      [0, 0],
+      [10, 0],
+    ]);
+    const edges = [makeEdge(0, [0, 1])];
+    const hulls = hullCompute.computeHulls(positions, edges, 5);
+
+    expect(hulls).toHaveLength(1);
+    expect(hulls[0].centroid[0]).toBeCloseTo(5, 1);
+    expect(hulls[0].centroid[1]).toBeCloseTo(0, 1);
   });
 });
 

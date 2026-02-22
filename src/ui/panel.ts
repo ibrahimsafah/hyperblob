@@ -115,7 +115,6 @@ export class Panel {
   }
 }
 
-// All panel CSS — dark theme, self-contained
 const PANEL_CSS = `
 /* ── Panel ── */
 #panel {
@@ -130,16 +129,16 @@ const PANEL_CSS = `
   padding: 14px 16px 10px;
   font-size: 13px;
   font-weight: 600;
-  color: #c0c0d0;
+  color: #2a2a3e;
   letter-spacing: 0.5px;
-  border-bottom: 1px solid #1e1e2e;
+  border-bottom: 1px solid #e0e0e5;
 }
 
 /* ── Tab Bar ── */
 .panel-tab-bar {
   display: flex;
-  border-bottom: 1px solid #1e1e2e;
-  background: #16161f;
+  border-bottom: 1px solid #e0e0e5;
+  background: #f8f8fa;
   flex-shrink: 0;
 }
 
@@ -148,7 +147,7 @@ const PANEL_CSS = `
   padding: 9px 4px;
   border: none;
   background: transparent;
-  color: #6a6a8a;
+  color: #888898;
   font-family: inherit;
   font-size: 11px;
   font-weight: 500;
@@ -158,11 +157,11 @@ const PANEL_CSS = `
 }
 
 .panel-tab-btn:hover {
-  color: #9a9abc;
+  color: #555570;
 }
 
 .panel-tab-btn.active {
-  color: #b0b0d0;
+  color: #2a2a3e;
   border-bottom-color: #5577cc;
 }
 
@@ -182,10 +181,10 @@ const PANEL_CSS = `
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: #5a5a78;
+  color: #888898;
   margin: 16px 0 8px;
   padding-bottom: 4px;
-  border-bottom: 1px solid #1e1e2e;
+  border-bottom: 1px solid #e0e0e5;
 }
 
 .panel-tab-content .ctrl-section-header:first-child {
@@ -205,12 +204,12 @@ const PANEL_CSS = `
 }
 
 .ctrl-label {
-  color: #8888a8;
+  color: #555570;
   font-size: 11px;
 }
 
 .ctrl-value {
-  color: #a0a0c0;
+  color: #333348;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -220,7 +219,7 @@ const PANEL_CSS = `
   appearance: none;
   width: 100%;
   height: 4px;
-  background: #1e1e2e;
+  background: #e0e0e8;
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -233,7 +232,7 @@ const PANEL_CSS = `
   height: 14px;
   background: #5577cc;
   border-radius: 50%;
-  border: 2px solid #13131a;
+  border: 2px solid #ffffff;
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -247,8 +246,37 @@ const PANEL_CSS = `
   height: 14px;
   background: #5577cc;
   border-radius: 50%;
-  border: 2px solid #13131a;
+  border: 2px solid #ffffff;
   cursor: pointer;
+}
+
+/* ── Select ── */
+.ctrl-select {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.ctrl-select-input {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+  border: 1px solid #d0d0d8;
+  border-radius: 4px;
+  background: #f8f8fa;
+  color: #333348;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.ctrl-select-input:hover {
+  border-color: #b0b0c0;
+}
+
+.ctrl-select-input:focus {
+  border-color: #5577cc;
 }
 
 /* ── Toggle ── */
@@ -263,8 +291,8 @@ const PANEL_CSS = `
   position: relative;
   width: 36px;
   height: 20px;
-  background: #1e1e2e;
-  border: 1px solid #2a2a3a;
+  background: #d8d8e0;
+  border: 1px solid #c0c0cc;
   border-radius: 10px;
   cursor: pointer;
   padding: 0;
@@ -272,7 +300,7 @@ const PANEL_CSS = `
 }
 
 .ctrl-toggle-btn.active {
-  background: #334488;
+  background: #5577cc;
   border-color: #5577cc;
 }
 
@@ -282,20 +310,20 @@ const PANEL_CSS = `
   left: 2px;
   width: 14px;
   height: 14px;
-  background: #6a6a8a;
+  background: #999;
   border-radius: 50%;
   transition: transform 0.2s, background 0.2s;
 }
 
 .ctrl-toggle-btn.active .ctrl-toggle-knob {
   transform: translateX(16px);
-  background: #aabbee;
+  background: #ffffff;
 }
 
 /* ── Button ── */
 .ctrl-btn {
   padding: 7px 14px;
-  border: 1px solid #2a2a3a;
+  border: 1px solid #d0d0d8;
   border-radius: 6px;
   font-family: inherit;
   font-size: 11px;
@@ -305,36 +333,36 @@ const PANEL_CSS = `
 }
 
 .ctrl-btn-default {
-  background: #1a1a28;
-  color: #9a9abc;
+  background: #f0f0f5;
+  color: #555570;
 }
 
 .ctrl-btn-default:hover {
-  background: #22223a;
-  border-color: #3a3a5a;
-  color: #b0b0d0;
+  background: #e8e8f0;
+  border-color: #b0b0c0;
+  color: #333348;
 }
 
 .ctrl-btn-primary {
-  background: #293d6e;
-  border-color: #3a5599;
-  color: #b0c8ff;
+  background: #5577cc;
+  border-color: #4466bb;
+  color: #ffffff;
 }
 
 .ctrl-btn-primary:hover {
-  background: #334888;
-  border-color: #4a66aa;
+  background: #4466bb;
+  border-color: #3355aa;
 }
 
 .ctrl-btn-danger {
-  background: #3a1a1a;
-  border-color: #5a2a2a;
-  color: #ff8888;
+  background: #fff0f0;
+  border-color: #ffaaaa;
+  color: #cc3333;
 }
 
 .ctrl-btn-danger:hover {
-  background: #4a2020;
-  border-color: #6a3a3a;
+  background: #ffe0e0;
+  border-color: #ff8888;
 }
 
 .ctrl-btn-row {
@@ -357,14 +385,14 @@ const PANEL_CSS = `
 }
 
 .ctrl-info-value {
-  color: #a0a0c0;
+  color: #333348;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 /* ── File Drop Zone ── */
 .ctrl-drop-zone {
-  border: 1px dashed #2a2a3a;
+  border: 1px dashed #d0d0d8;
   border-radius: 8px;
   padding: 16px;
   text-align: center;
@@ -380,13 +408,13 @@ const PANEL_CSS = `
 }
 
 .ctrl-drop-label {
-  color: #8888a8;
+  color: #555570;
   font-size: 12px;
   margin-bottom: 4px;
 }
 
 .ctrl-drop-hint {
-  color: #5a5a78;
+  color: #888898;
   font-size: 10px;
 }
 
@@ -413,14 +441,14 @@ const PANEL_CSS = `
   width: 32px;
   height: 24px;
   border-radius: 4px;
-  border: 2px solid #2a2a3a;
+  border: 2px solid #d0d0d8;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.1s;
   padding: 0;
 }
 
 .ctrl-color-swatch:hover {
-  border-color: #4a4a6a;
+  border-color: #8888aa;
   transform: scale(1.08);
 }
 
@@ -436,7 +464,7 @@ const PANEL_CSS = `
 .ctrl-alpha-track {
   width: 100%;
   height: 4px;
-  background: #1e1e2e;
+  background: #e0e0e8;
   border-radius: 2px;
   overflow: hidden;
 }
@@ -458,11 +486,11 @@ const PANEL_CSS = `
 }
 
 .panel-tab-contents::-webkit-scrollbar-thumb {
-  background: #2a2a3a;
+  background: #d0d0d8;
   border-radius: 3px;
 }
 
 .panel-tab-contents::-webkit-scrollbar-thumb:hover {
-  background: #3a3a5a;
+  background: #b0b0c0;
 }
 `;

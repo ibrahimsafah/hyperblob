@@ -220,8 +220,8 @@ export function createColorPresets(opts: {
   labelEl.textContent = opts.label;
 
   const presets: { name: string; color: [number, number, number, number]; hex: string }[] = [
+    { name: 'Light', color: [0.97, 0.97, 0.98, 1.0], hex: '#f7f7fa' },
     { name: 'Dark', color: [0.04, 0.04, 0.06, 1.0], hex: '#0a0a0f' },
-    { name: 'Light', color: [0.92, 0.92, 0.94, 1.0], hex: '#ebebf0' },
     { name: 'Midnight', color: [0.06, 0.06, 0.12, 1.0], hex: '#0f0f1f' },
     { name: 'Ocean', color: [0.04, 0.08, 0.14, 1.0], hex: '#0a1424' },
   ];
@@ -248,6 +248,39 @@ export function createColorPresets(opts: {
 
   container.appendChild(labelEl);
   container.appendChild(swatches);
+  return container;
+}
+
+export function createSelect(opts: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+}): HTMLElement {
+  const container = document.createElement('div');
+  container.className = 'ctrl-select';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'ctrl-label';
+  labelEl.textContent = opts.label;
+
+  const select = document.createElement('select');
+  select.className = 'ctrl-select-input';
+
+  for (const opt of opts.options) {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    if (opt.value === opts.value) option.selected = true;
+    select.appendChild(option);
+  }
+
+  select.addEventListener('change', () => {
+    opts.onChange(select.value);
+  });
+
+  container.appendChild(labelEl);
+  container.appendChild(select);
   return container;
 }
 

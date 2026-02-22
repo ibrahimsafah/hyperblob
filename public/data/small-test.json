@@ -1,0 +1,29 @@
+{
+  "network-type": "undirected",
+  "incidences": [
+    {"node": "FN", "edge": 0},
+    {"node": "TH", "edge": 0},
+    {"node": "TH", "edge": 1},
+    {"node": "JV", "edge": 1},
+    {"node": "BM", "edge": 2},
+    {"node": "FN", "edge": 2},
+    {"node": "JA", "edge": 2},
+    {"node": "JV", "edge": 3},
+    {"node": "JU", "edge": 3},
+    {"node": "CH", "edge": 3},
+    {"node": "BM", "edge": 3},
+    {"node": "JU", "edge": 4},
+    {"node": "CH", "edge": 4},
+    {"node": "BR", "edge": 4},
+    {"node": "CN", "edge": 4},
+    {"node": "CC", "edge": 4},
+    {"node": "JV", "edge": 4},
+    {"node": "BM", "edge": 4},
+    {"node": "TH", "edge": 5},
+    {"node": "GP", "edge": 5},
+    {"node": "GP", "edge": 6},
+    {"node": "MP", "edge": 6},
+    {"node": "MA", "edge": 7},
+    {"node": "GP", "edge": 7}
+  ]
+}

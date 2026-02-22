@@ -70,7 +70,7 @@ export function defaultSimulationParams(): SimulationParams {
     centerStrength: 0.01,
     velocityDecay: 0.6,
     alpha: 1.0,
-    alphaTarget: 0.0,
+    alphaTarget: 0.02,
     alphaDecay: 0.0228, // ~300 iterations to alphaMin
     alphaMin: 0.001,
     theta: 0.9,
@@ -80,22 +80,32 @@ export function defaultSimulationParams(): SimulationParams {
 
 // ── Rendering parameters ──
 
+export type HullMode = 'convex' | 'metaball';
+
 export interface RenderParams {
   nodeBaseSize: number;
   edgeOpacity: number;
   hullAlpha: number;
   hullOutline: boolean;
   hullMargin: number;
+  hullSmoothing: number;
+  hullMode: HullMode;
+  hullMetaballThreshold: number;
+  nodeDarkMode: boolean;
   backgroundColor: [number, number, number, number];
 }
 
 export function defaultRenderParams(): RenderParams {
   return {
-    nodeBaseSize: 6,
-    edgeOpacity: 0.3,
-    hullAlpha: 0.15,
-    hullOutline: true,
-    hullMargin: 12,
-    backgroundColor: [0.04, 0.04, 0.06, 1.0],
+    nodeBaseSize: 10,
+    edgeOpacity: 0.0,
+    hullAlpha: 0.25,
+    hullOutline: false,
+    hullMargin: 3,
+    hullSmoothing: 4,
+    hullMode: 'convex',
+    hullMetaballThreshold: 0.5,
+    nodeDarkMode: true,
+    backgroundColor: [0.97, 0.97, 0.98, 1.0],
   };
 }

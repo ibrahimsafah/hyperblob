@@ -10,7 +10,7 @@ struct RenderParams {
   node_size: f32,
   viewport_width: f32,
   viewport_height: f32,
-  _pad: f32,
+  node_dark_mode: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -55,11 +55,14 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     pixel_offset.y * 2.0 / params.viewport_height,
   );
 
-  // Color from palette
+  // Color from palette (or dark mode override)
   let group = metadata[node_index * 2u];
   let palette_size = arrayLength(&palette);
   let color_index = group % palette_size;
-  let color = palette[color_index];
+  var color = palette[color_index];
+  if (params.node_dark_mode > 0.5) {
+    color = vec4<f32>(0.12, 0.12, 0.14, 1.0);
+  }
 
   var out: VertexOutput;
   out.position = vec4<f32>(clip_pos.xy + ndc_offset, clip_pos.z, clip_pos.w);

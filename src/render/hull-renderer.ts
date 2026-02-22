@@ -8,6 +8,7 @@ import type { Camera } from './camera';
 import type { HypergraphData, RenderParams } from '../data/types';
 import type { HullData } from './hull-compute';
 import { HullCompute } from './hull-compute';
+import { MetaballCompute } from './metaball-compute';
 import { getPaletteColor } from '../utils/color';
 import hullShaderCode from '../shaders/hull-render.wgsl?raw';
 
@@ -26,6 +27,7 @@ export class HullRenderer {
   private cameraBuffer: GPUBuffer | null = null;
 
   private hullCompute = new HullCompute();
+  private metaballCompute: MetaballCompute | null = null;
   private hypergraphData: HypergraphData | null = null;
 
   // Hull vertex buffers
@@ -38,6 +40,7 @@ export class HullRenderer {
   private frameCounter = 0;
   private readonly recomputeInterval = 10;
   private needsRecompute = true;
+  private isRecomputing = false;
 
   constructor(gpu: GPUContext, buffers: BufferManager, camera: Camera) {
     this.gpu = gpu;
@@ -149,25 +152,46 @@ export class HullRenderer {
   }
 
   private async recomputeHulls(renderParams: RenderParams): Promise<void> {
+    if (this.isRecomputing) return; // prevent concurrent recomputes (race condition)
     if (!this.hypergraphData || !this.buffers.hasBuffer('node-positions')) return;
 
-    const nodeCount = this.hypergraphData.nodes.length;
-    const positionData = await this.buffers.readBuffer('node-positions', nodeCount * 16);
+    this.isRecomputing = true;
+    try {
+      const nodeCount = this.hypergraphData.nodes.length;
+      const positionData = await this.buffers.readBuffer('node-positions', nodeCount * 16);
 
-    const hulls = this.hullCompute.computeHulls(
-      positionData,
-      this.hypergraphData.hyperedges,
-      renderParams.hullMargin,
-    );
+      let hulls: HullData[];
 
-    this.buildFillVertices(hulls, renderParams.hullAlpha);
-    if (renderParams.hullOutline) {
-      this.buildOutlineVertices(hulls);
-    } else {
-      this.outlineVertexCount = 0;
+      if (renderParams.hullMode === 'metaball') {
+        // Lazy-init GPU metaball compute
+        this.metaballCompute ??= new MetaballCompute(this.gpu, this.buffers);
+        hulls = await this.metaballCompute.computeMetaballHulls(
+          positionData,
+          this.hypergraphData.hyperedges,
+          renderParams.hullMargin,
+          renderParams.hullMetaballThreshold,
+          renderParams.hullSmoothing,
+        );
+      } else {
+        hulls = this.hullCompute.computeHulls(
+          positionData,
+          this.hypergraphData.hyperedges,
+          renderParams.hullMargin,
+          renderParams.hullSmoothing,
+        );
+      }
+
+      this.buildFillVertices(hulls, renderParams.hullAlpha);
+      if (renderParams.hullOutline) {
+        this.buildOutlineVertices(hulls);
+      } else {
+        this.outlineVertexCount = 0;
+      }
+
+      this.needsRecompute = false;
+    } finally {
+      this.isRecomputing = false;
     }
-
-    this.needsRecompute = false;
   }
 
   private buildFillVertices(hulls: HullData[], alpha: number): void {
@@ -264,6 +288,10 @@ export class HullRenderer {
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
     this.gpu.device.queue.writeBuffer(this.outlineVertexBuffer, 0, data);
+  }
+
+  forceRecompute(): void {
+    this.needsRecompute = true;
   }
 
   render(renderPass: GPURenderPassEncoder, renderParams: RenderParams): void {

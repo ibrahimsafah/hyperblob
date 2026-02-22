@@ -62,7 +62,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let com_y = tree[tree_base + 1u];
     let mass = tree[tree_base + 2u];
     let cell_size = tree[tree_base + 3u];
-    let node_index_bits = bitcast<u32>(tree[tree_base + 4u]);
+    let node_index_f = tree[tree_base + 4u];
     let child_mask = u32(tree[tree_base + 5u]);
 
     if (mass <= 0.0) {
@@ -73,12 +73,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dy = py - com_y;
     let dist_sq = dx * dx + dy * dy;
 
-    // Is this a leaf? (node_index_bits != 0xFFFFFFFF)
-    let is_leaf = (node_index_bits != 0xFFFFFFFFu);
+    // Is this a leaf? (node_index >= 0 means leaf; -1 means internal)
+    let is_leaf = (node_index_f >= 0.0);
 
     // If leaf, check if it's the same node
     if (is_leaf) {
-      if (node_index_bits == idx) {
+      if (u32(node_index_f) == idx) {
         continue; // skip self
       }
       // Apply direct force

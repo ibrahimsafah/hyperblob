@@ -25,7 +25,7 @@ fn histogram(@builtin(global_invocation_id) gid: vec3<u32>,
              @builtin(local_invocation_id) lid: vec3<u32>,
              @builtin(workgroup_id) wgid: vec3<u32>) {
   // Clear local histogram
-  local_hist[lid.x] = 0u;
+  atomicStore(&local_hist[lid.x], 0u);
   workgroupBarrier();
 
   let idx = gid.x;
@@ -68,7 +68,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>,
            @builtin(local_invocation_id) lid: vec3<u32>,
            @builtin(workgroup_id) wgid: vec3<u32>) {
   // Build local histogram to compute local rank
-  local_hist[lid.x] = 0u;
+  atomicStore(&local_hist[lid.x], 0u);
   workgroupBarrier();
 
   let idx = gid.x;
@@ -93,7 +93,7 @@ fn scatter(@builtin(global_invocation_id) gid: vec3<u32>,
   workgroupBarrier();
 
   // Reset local_hist for use as per-digit counter
-  local_hist[lid.x] = 0u;
+  atomicStore(&local_hist[lid.x], 0u);
   workgroupBarrier();
 
   if (idx < params.node_count) {

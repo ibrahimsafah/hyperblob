@@ -1,11 +1,11 @@
 // CPU convex hull computation using Andrew's monotone chain algorithm
-// Computes convex hulls for each hyperedge, expanded by a configurable margin
+// Computes padded convex hulls for each hyperedge, smoothed with Chaikin subdivision
 
 import type { Vec2 } from '../utils/math';
 import type { HyperedgeData } from '../data/types';
 
 export interface HullData {
-  /** Convex hull polygon vertices in CCW order */
+  /** Hull polygon vertices (smoothed) */
   vertices: Vec2[];
   /** Centroid of the hull */
   centroid: Vec2;
@@ -15,6 +15,8 @@ export interface HullData {
   triangles: Vec2[];
 }
 
+// ── Geometry primitives ──
+
 /** Cross product of vectors OA and OB where O is origin point */
 function cross(o: Vec2, a: Vec2, b: Vec2): number {
   return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
@@ -23,15 +25,12 @@ function cross(o: Vec2, a: Vec2, b: Vec2): number {
 /**
  * Andrew's monotone chain convex hull algorithm.
  * Returns hull vertices in CCW order.
- * Input points are not modified.
  */
 function convexHull(points: Vec2[]): Vec2[] {
   const n = points.length;
   if (n <= 1) return points.slice();
 
-  // Sort by x, then by y
   const sorted = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-
   if (n === 2) return sorted;
 
   // Build lower hull
@@ -53,83 +52,50 @@ function convexHull(points: Vec2[]): Vec2[] {
     upper.push(p);
   }
 
-  // Remove last point of each half because it's repeated
   lower.pop();
   upper.pop();
-
   return lower.concat(upper);
 }
 
-/** Check if all points are approximately collinear */
-function areCollinear(points: Vec2[]): boolean {
-  if (points.length < 3) return true;
-  const eps = 1e-6;
-  for (let i = 2; i < points.length; i++) {
-    if (Math.abs(cross(points[0], points[1], points[i])) > eps) {
-      return false;
-    }
+// ── Shape generators ──
+
+/**
+ * Generate a circle shape for a single-node hyperedge.
+ */
+function circleShape(center: Vec2, radius: number, segments = 16): Vec2[] {
+  const verts: Vec2[] = [];
+  for (let i = 0; i < segments; i++) {
+    const angle = (2 * Math.PI * i) / segments;
+    verts.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)]);
   }
-  return true;
+  return verts;
 }
 
 /**
- * Create a thin rectangle around a line defined by collinear points.
- * Returns 4 vertices forming a rectangle with the given half-width.
+ * Chaikin corner-cutting subdivision for closed polygons.
+ * Each iteration replaces each edge AB with two points at 25% and 75%.
+ * Doubles the vertex count per iteration → smooth organic curves.
  */
-function collinearRect(points: Vec2[], halfWidth: number): Vec2[] {
-  // Find the two extreme points along the line
-  let minP = points[0];
-  let maxP = points[0];
-  // Use the first and last sorted points as endpoints
-  const sorted = points.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  minP = sorted[0];
-  maxP = sorted[sorted.length - 1];
+function chaikinSmooth(vertices: Vec2[], iterations: number): Vec2[] {
+  if (iterations <= 0 || vertices.length < 3) return vertices;
 
-  // Direction along the line
-  const dx = maxP[0] - minP[0];
-  const dy = maxP[1] - minP[1];
-  const len = Math.sqrt(dx * dx + dy * dy);
-  if (len < 1e-10) {
-    // All points are the same; create a small square
-    return [
-      [minP[0] - halfWidth, minP[1] - halfWidth],
-      [minP[0] + halfWidth, minP[1] - halfWidth],
-      [minP[0] + halfWidth, minP[1] + halfWidth],
-      [minP[0] - halfWidth, minP[1] + halfWidth],
-    ];
+  let current = vertices;
+  for (let iter = 0; iter < iterations; iter++) {
+    const next: Vec2[] = [];
+    const n = current.length;
+    for (let i = 0; i < n; i++) {
+      const a = current[i];
+      const b = current[(i + 1) % n];
+      next.push([0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]]);
+      next.push([0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]);
+    }
+    current = next;
   }
-
-  // Normal perpendicular to the line
-  const nx = -dy / len * halfWidth;
-  const ny = dx / len * halfWidth;
-
-  // Extend endpoints slightly along the line direction
-  const ex = dx / len * halfWidth;
-  const ey = dy / len * halfWidth;
-
-  return [
-    [minP[0] - ex + nx, minP[1] - ey + ny],
-    [maxP[0] + ex + nx, maxP[1] + ey + ny],
-    [maxP[0] + ex - nx, maxP[1] + ey - ny],
-    [minP[0] - ex - nx, minP[1] - ey - ny],
-  ];
+  return current;
 }
 
-/** Expand hull vertices outward from centroid by the given margin */
-function expandHull(vertices: Vec2[], centroid: Vec2, margin: number): Vec2[] {
-  if (margin <= 0) return vertices;
+// ── Helpers ──
 
-  return vertices.map((v) => {
-    const dx = v[0] - centroid[0];
-    const dy = v[1] - centroid[1];
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < 1e-10) return v;
-    const scale = margin / dist;
-    return [v[0] + dx * scale, v[1] + dy * scale] as Vec2;
-  });
-}
-
-/** Compute centroid of a set of points */
 function computeCentroid(points: Vec2[]): Vec2 {
   let cx = 0;
   let cy = 0;
@@ -137,8 +103,7 @@ function computeCentroid(points: Vec2[]): Vec2 {
     cx += p[0];
     cy += p[1];
   }
-  const n = points.length;
-  return [cx / n, cy / n];
+  return [cx / points.length, cy / points.length];
 }
 
 /** Fan-triangulate a convex polygon from its centroid */
@@ -146,29 +111,51 @@ function fanTriangulate(centroid: Vec2, hull: Vec2[]): Vec2[] {
   const triangles: Vec2[] = [];
   const n = hull.length;
   for (let i = 0; i < n; i++) {
-    const next = (i + 1) % n;
-    triangles.push(centroid, hull[i], hull[next]);
+    triangles.push(centroid, hull[i], hull[(i + 1) % n]);
   }
   return triangles;
 }
 
+/**
+ * Pad each point with circle-offset points, then compute convex hull.
+ * This is equivalent to the Minkowski sum of the point set with a disc,
+ * creating a hull that "hugs" each node with a uniform buffer zone.
+ */
+function paddedConvexHull(points: Vec2[], margin: number): Vec2[] {
+  const padded: Vec2[] = [];
+  const segments = 8;
+  for (const p of points) {
+    for (let a = 0; a < segments; a++) {
+      const angle = (Math.PI * 2 * a) / segments;
+      padded.push([
+        p[0] + margin * Math.cos(angle),
+        p[1] + margin * Math.sin(angle),
+      ]);
+    }
+  }
+  return convexHull(padded);
+}
+
+// ── Main class ──
+
 export class HullCompute {
   /**
-   * Compute convex hulls for all hyperedges with 3+ members.
-   * @param positions Float32Array with [x, y, vx, vy] per node
-   * @param hyperedges Array of hyperedge data
-   * @param margin Expansion margin in world-space units
-   * @returns Array of HullData for each qualifying hyperedge
+   * Compute hulls for all hyperedges.
+   *  - 1 member  → circle
+   *  - 2 members → capsule (stadium)
+   *  - 3+ members → padded convex hull + Chaikin smoothing
    */
   computeHulls(
     positions: Float32Array,
     hyperedges: HyperedgeData[],
     margin: number,
+    smoothIterations = 0,
   ): HullData[] {
     const results: HullData[] = [];
+    const effectiveMargin = Math.max(margin, 1);
 
     for (const he of hyperedges) {
-      if (he.memberIndices.length < 3) continue;
+      if (he.memberIndices.length < 1) continue;
 
       // Extract member positions
       const points: Vec2[] = [];
@@ -177,26 +164,22 @@ export class HullCompute {
         points.push([positions[base], positions[base + 1]]);
       }
 
-      let hull: Vec2[];
-      if (areCollinear(points)) {
-        // For collinear points, create a thin rectangle
-        hull = collinearRect(points, Math.max(margin, 5));
+      const centroid = computeCentroid(points);
+      let shape: Vec2[];
+
+      if (he.memberIndices.length === 1) {
+        // Singleton → circle
+        shape = circleShape(points[0], effectiveMargin);
       } else {
-        hull = convexHull(points);
+        // 2+ members → padded convex hull + smoothing
+        const hull = paddedConvexHull(points, effectiveMargin);
+        if (hull.length < 3) continue;
+        shape = chaikinSmooth(hull, smoothIterations);
       }
 
-      if (hull.length < 3) continue;
-
-      const centroid = computeCentroid(points);
-
-      // Expand hull outward by margin
-      const expanded = expandHull(hull, centroid, margin);
-
-      // Fan-triangulate from centroid
-      const triangles = fanTriangulate(centroid, expanded);
-
+      const triangles = fanTriangulate(centroid, shape);
       results.push({
-        vertices: expanded,
+        vertices: shape,
         centroid,
         hyperedgeIndex: he.index,
         triangles,
