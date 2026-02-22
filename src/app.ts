@@ -34,6 +34,11 @@ export class App {
   private paramsBuffer: GPUBuffer | null = null;
   private paletteBuffer: GPUBuffer | null = null;
 
+  // Pre-allocated typed arrays for per-frame GPU uploads (avoid GC pressure)
+  private dragUploadArray = new Float32Array(4);   // [x, y, 0, 0]
+  private renderParamsArray = new Float32Array(4);  // [nodeSize, vpW, vpH, darkMode]
+  private lastCameraVersion = -1;
+
   // Dynamically loaded modules (any because they may not exist yet)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private modules: Record<string, any> = {};
@@ -396,8 +401,11 @@ export class App {
 
     // Write dragged node position BEFORE simulation so GPU forces read the correct position
     if (this.draggedNodeIndex !== null && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
-      const pre = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], 0, 0]);
-      this.buffers.uploadData('node-positions', pre, this.draggedNodeIndex * 16);
+      this.dragUploadArray[0] = this.dragSmoothPos[0];
+      this.dragUploadArray[1] = this.dragSmoothPos[1];
+      this.dragUploadArray[2] = 0;
+      this.dragUploadArray[3] = 0;
+      this.buffers.uploadData('node-positions', this.dragUploadArray, this.draggedNodeIndex * 16);
     }
 
     // Update simulation
@@ -412,8 +420,9 @@ export class App {
       const t = 0.55; // lerp factor: tight tracking with jitter smoothing at 120fps
       this.dragSmoothPos[0] += (this.dragTargetPos[0] - this.dragSmoothPos[0]) * t;
       this.dragSmoothPos[1] += (this.dragTargetPos[1] - this.dragSmoothPos[1]) * t;
-      const data = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], 0, 0]);
-      this.buffers.uploadData('node-positions', data, this.draggedNodeIndex * 16);
+      this.dragUploadArray[0] = this.dragSmoothPos[0];
+      this.dragUploadArray[1] = this.dragSmoothPos[1];
+      this.buffers.uploadData('node-positions', this.dragUploadArray, this.draggedNodeIndex * 16);
     }
 
     // Periodically update CPU position cache for hit testing
@@ -441,20 +450,19 @@ export class App {
   private render(): void {
     const { device, context } = this.gpu;
 
-    // Update camera uniform
-    if (this.cameraBuffer) {
+    // Update camera uniform (only when camera has changed)
+    if (this.cameraBuffer && this.camera.version !== this.lastCameraVersion) {
+      this.lastCameraVersion = this.camera.version;
       device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
     }
 
-    // Update render params uniform
+    // Update render params uniform (reuse pre-allocated array)
     if (this.paramsBuffer) {
-      const data = new Float32Array([
-        this.renderParams.nodeBaseSize,
-        this.camera.getViewportWidth(),
-        this.camera.getViewportHeight(),
-        this.renderParams.nodeDarkMode ? 1.0 : 0.0,
-      ]);
-      device.queue.writeBuffer(this.paramsBuffer, 0, data);
+      this.renderParamsArray[0] = this.renderParams.nodeBaseSize;
+      this.renderParamsArray[1] = this.camera.getViewportWidth();
+      this.renderParamsArray[2] = this.camera.getViewportHeight();
+      this.renderParamsArray[3] = this.renderParams.nodeDarkMode ? 1.0 : 0.0;
+      device.queue.writeBuffer(this.paramsBuffer, 0, this.renderParamsArray);
     }
 
     const textureView = context.getCurrentTexture().createView();

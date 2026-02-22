@@ -30,10 +30,12 @@ export class HullRenderer {
   private metaballCompute: MetaballCompute | null = null;
   private hypergraphData: HypergraphData | null = null;
 
-  // Hull vertex buffers
+  // Hull vertex buffers (pre-allocated, grown as needed)
   private fillVertexBuffer: GPUBuffer | null = null;
+  private fillBufferCapacity = 0; // in bytes
   private fillVertexCount = 0;
   private outlineVertexBuffer: GPUBuffer | null = null;
+  private outlineBufferCapacity = 0; // in bytes
   private outlineVertexCount = 0;
 
   // Recompute throttling
@@ -41,6 +43,7 @@ export class HullRenderer {
   private readonly recomputeInterval = 10;
   private needsRecompute = true;
   private isRecomputing = false;
+  private lastCameraVersion = -1;
 
   constructor(gpu: GPUContext, buffers: BufferManager, camera: Camera) {
     this.gpu = gpu;
@@ -224,16 +227,17 @@ export class HullRenderer {
 
     this.fillVertexCount = totalVertices;
 
-    // Create/recreate vertex buffer
-    if (this.fillVertexBuffer) {
-      this.fillVertexBuffer.destroy();
+    // Grow buffer only when capacity is exceeded (amortized 2× growth)
+    if (data.byteLength > this.fillBufferCapacity) {
+      if (this.fillVertexBuffer) this.fillVertexBuffer.destroy();
+      this.fillBufferCapacity = data.byteLength * 2;
+      this.fillVertexBuffer = this.gpu.device.createBuffer({
+        label: 'hull-fill-vertices',
+        size: this.fillBufferCapacity,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
     }
-    this.fillVertexBuffer = this.gpu.device.createBuffer({
-      label: 'hull-fill-vertices',
-      size: data.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.gpu.device.queue.writeBuffer(this.fillVertexBuffer, 0, data);
+    this.gpu.device.queue.writeBuffer(this.fillVertexBuffer!, 0, data);
   }
 
   private buildOutlineVertices(hulls: HullData[]): void {
@@ -278,16 +282,17 @@ export class HullRenderer {
 
     this.outlineVertexCount = totalVertices;
 
-    // Create/recreate vertex buffer
-    if (this.outlineVertexBuffer) {
-      this.outlineVertexBuffer.destroy();
+    // Grow buffer only when capacity is exceeded (amortized 2× growth)
+    if (data.byteLength > this.outlineBufferCapacity) {
+      if (this.outlineVertexBuffer) this.outlineVertexBuffer.destroy();
+      this.outlineBufferCapacity = data.byteLength * 2;
+      this.outlineVertexBuffer = this.gpu.device.createBuffer({
+        label: 'hull-outline-vertices',
+        size: this.outlineBufferCapacity,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
     }
-    this.outlineVertexBuffer = this.gpu.device.createBuffer({
-      label: 'hull-outline-vertices',
-      size: data.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.gpu.device.queue.writeBuffer(this.outlineVertexBuffer, 0, data);
+    this.gpu.device.queue.writeBuffer(this.outlineVertexBuffer!, 0, data);
   }
 
   forceRecompute(): void {
@@ -298,8 +303,11 @@ export class HullRenderer {
     if (!this.pipeline || !this.bindGroup || !this.cameraBuffer) return;
     if (!this.hypergraphData) return;
 
-    // Update camera uniform
-    this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+    // Update camera uniform (only when camera has changed)
+    if (this.camera.version !== this.lastCameraVersion) {
+      this.lastCameraVersion = this.camera.version;
+      this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+    }
 
     // Throttled hull recompute
     this.frameCounter++;

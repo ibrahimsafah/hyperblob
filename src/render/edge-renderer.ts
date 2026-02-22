@@ -20,6 +20,8 @@ export class EdgeRenderer {
 
   // Total number of line segments (each = 2 vertices)
   private totalLineSegments = 0;
+  private lastCameraVersion = -1;
+  private edgeParamsArray = new Float32Array(4);
 
   constructor(gpu: GPUContext, buffers: BufferManager, camera: Camera) {
     this.gpu = gpu;
@@ -150,12 +152,15 @@ export class EdgeRenderer {
     if (!this.pipeline || !this.bindGroup || !this.cameraBuffer || !this.edgeParamsBuffer) return;
     if (this.totalLineSegments === 0) return;
 
-    // Update camera uniform
-    this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+    // Update camera uniform (only when camera has changed)
+    if (this.camera.version !== this.lastCameraVersion) {
+      this.lastCameraVersion = this.camera.version;
+      this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+    }
 
-    // Update edge params (opacity)
-    const params = new Float32Array([renderParams.edgeOpacity, 0, 0, 0]);
-    this.gpu.device.queue.writeBuffer(this.edgeParamsBuffer, 0, params);
+    // Update edge params (opacity) — reuse pre-allocated array
+    this.edgeParamsArray[0] = renderParams.edgeOpacity;
+    this.gpu.device.queue.writeBuffer(this.edgeParamsBuffer, 0, this.edgeParamsArray);
 
     renderPass.setPipeline(this.pipeline);
     renderPass.setBindGroup(0, this.bindGroup);
