@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  assetsInclude: ['**/*.wgsl'],
+  assetsInclude: ['**/*.wgsl', '**/*.wasm'],
   build: {
     target: 'esnext',
   },

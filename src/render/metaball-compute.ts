@@ -9,13 +9,19 @@ import type { HullData } from './hull-compute';
 import type { Vec2 } from '../utils/math';
 import {
   type ScalarGrid,
-  marchingSquares,
+  marchingSquares as marchingSquaresJS,
   stitchContours,
   chaikinSmooth,
-  addBridgeField,
+  addBridgeField as addBridgeFieldJS,
   earClipTriangulate,
   fanTriangulateFromCentroid,
 } from './metaball-hull';
+import {
+  addBridgeFieldWasm,
+  marchingSquaresWasm,
+  loadWasm,
+  isWasmReady,
+} from '../wasm/metaball-contour-wasm';
 import shaderCode from '../shaders/metaball-field.wgsl?raw';
 
 const GRID_SIZE = 64;
@@ -85,6 +91,9 @@ export class MetaballCompute {
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       'metaball-params',
     );
+
+    // Eagerly attempt WASM load (non-blocking; falls back to JS if it fails)
+    loadWasm().catch(() => { /* fallback to JS — no action needed */ });
   }
 
   /**
@@ -248,9 +257,16 @@ export class MetaballCompute {
       };
 
       // Overlay MST bridge field to keep blobs connected when nodes are far apart
-      addBridgeField(grid, gpuEdges[i].points, sigma);
+      // Use WASM-accelerated version if available, JS fallback otherwise
+      if (isWasmReady()) {
+        addBridgeFieldWasm(grid, gpuEdges[i].points, sigma);
+      } else {
+        addBridgeFieldJS(grid, gpuEdges[i].points, sigma);
+      }
 
-      const segments = marchingSquares(grid, threshold);
+      const segments = isWasmReady()
+        ? marchingSquaresWasm(grid, threshold)
+        : marchingSquaresJS(grid, threshold);
       if (segments.length === 0) continue;
 
       const contours = stitchContours(segments);

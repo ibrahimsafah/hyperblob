@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run build:wasm && tsc && vite build",
+    "build:wasm": "wat2wasm src/wasm/metaball-contour.wat -o src/wasm/metaball-contour.wasm",
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
