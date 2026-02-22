@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hypergraph Visualizer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0f; color: #e0e0e0; font-family: system-ui, -apple-system, sans-serif; }
+    #app { display: flex; width: 100%; height: 100%; }
+    #canvas-container { flex: 1; position: relative; }
+    canvas { width: 100%; height: 100%; display: block; }
+    #panel { width: 320px; height: 100%; background: #13131a; border-left: 1px solid #2a2a3a; overflow-y: auto; flex-shrink: 0; }
+    #stats { position: absolute; top: 12px; left: 12px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: #8888aa; pointer-events: none; z-index: 10; line-height: 1.6; }
+    #error-overlay { display: none; position: fixed; inset: 0; background: rgba(10,10,15,0.95); z-index: 1000; justify-content: center; align-items: center; }
+    #error-overlay.visible { display: flex; }
+    #error-box { background: #1a1a2e; border: 1px solid #ff4466; border-radius: 12px; padding: 32px; max-width: 500px; text-align: center; }
+    #error-box h2 { color: #ff4466; margin-bottom: 12px; }
+    #error-box p { color: #aaa; line-height: 1.6; }
+    #error-box a { color: #6688ff; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="canvas-container">
+      <canvas id="gpu-canvas"></canvas>
+      <div id="stats"></div>
+    </div>
+    <div id="panel"></div>
+  </div>
+  <div id="error-overlay">
+    <div id="error-box">
+      <h2>WebGPU Not Available</h2>
+      <p>This visualizer requires WebGPU support.<br>Please use Chrome 113+, Edge 113+, or Brave with WebGPU enabled.</p>
+      <p style="margin-top:12px"><a href="https://webgpufundamentals.org/webgpu/lessons/webgpu-setup.html" target="_blank">Check WebGPU support</a></p>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
