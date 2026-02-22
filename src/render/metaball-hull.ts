@@ -181,12 +181,15 @@ export function marchingSquares(grid: ScalarGrid, threshold: number): Segment[] 
 // ── Contour stitching ──
 
 // Integer hash: pack quantized x,y into a single number (no string allocation)
-// Uses a large prime multiplier to reduce collisions
-const HASH_PRECISION = 1e4;
-const HASH_PRIME = 100003;
+// Multiplier must exceed the full range of quantized Y values to guarantee
+// zero collisions. With coords in ±10000 and precision 1e3, quantized range
+// is ±1e7, so multiplier 20_000_003 (prime > 2e7) makes collisions impossible.
+// Max hash ≈ 1e7 * 2e7 = 2e14, safely within Number.MAX_SAFE_INTEGER (9e15).
+const HASH_PRECISION = 1e3;
+const HASH_MULTIPLIER = 20_000_003;
 
 function hashPointInt(p: Vec2): number {
-  return Math.round(p[0] * HASH_PRECISION) * HASH_PRIME + Math.round(p[1] * HASH_PRECISION);
+  return Math.round(p[0] * HASH_PRECISION) * HASH_MULTIPLIER + Math.round(p[1] * HASH_PRECISION);
 }
 
 export function stitchContours(segments: Segment[]): Vec2[][] {
