@@ -16,10 +16,10 @@ export interface PanelConfig {
   onFitToScreen: () => void;
 }
 
-interface TabDef {
-  id: string;
+interface SectionDef {
   label: string;
   content: HTMLElement;
+  defaultOpen: boolean;
 }
 
 export class Panel {
@@ -38,7 +38,7 @@ export class Panel {
     // Title
     const title = document.createElement('div');
     title.className = 'panel-title';
-    title.textContent = 'Hypergraph Visualizer';
+    title.textContent = 'Hyperblob';
     this.container.appendChild(title);
 
     // Build tabs
@@ -58,47 +58,53 @@ export class Panel {
 
     const cameraTab = createCameraTab(config.camera, config.onFitToScreen);
 
-    const tabs: TabDef[] = [
-      { id: 'sim', label: 'Simulation', content: simTab },
-      { id: 'render', label: 'Rendering', content: renderTab },
-      { id: 'data', label: 'Data', content: dataTabResult.el },
-      { id: 'camera', label: 'Camera', content: cameraTab },
+    const sections: SectionDef[] = [
+      { label: 'Simulation', content: simTab, defaultOpen: true },
+      { label: 'Rendering', content: renderTab, defaultOpen: true },
+      { label: 'Data', content: dataTabResult.el, defaultOpen: false },
+      { label: 'Camera', content: cameraTab, defaultOpen: false },
     ];
 
-    // Tab bar
-    const tabBar = document.createElement('div');
-    tabBar.className = 'panel-tab-bar';
+    // Scrollable wrapper for all sections
+    const scrollArea = document.createElement('div');
+    scrollArea.className = 'panel-sections';
 
-    const tabContents = document.createElement('div');
-    tabContents.className = 'panel-tab-contents';
+    for (const section of sections) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'panel-section';
+      if (section.defaultOpen) wrapper.classList.add('open');
 
-    tabs.forEach((tab, i) => {
-      // Tab button
-      const btn = document.createElement('button');
-      btn.className = 'panel-tab-btn';
-      btn.textContent = tab.label;
-      btn.setAttribute('data-tab', tab.id);
-      if (i === 0) btn.classList.add('active');
+      // Header
+      const header = document.createElement('div');
+      header.className = 'panel-section-header';
 
-      btn.addEventListener('click', () => {
-        tabBar.querySelectorAll('.panel-tab-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
+      const label = document.createElement('span');
+      label.className = 'panel-section-label';
+      label.textContent = section.label;
 
-        tabContents.querySelectorAll('.panel-tab-content').forEach(c => {
-          (c as HTMLElement).style.display = 'none';
-        });
-        tab.content.style.display = '';
+      const chevron = document.createElement('span');
+      chevron.className = 'panel-section-chevron';
+      chevron.textContent = '\u25B6'; // ▶
+
+      header.appendChild(label);
+      header.appendChild(chevron);
+
+      // Body
+      const body = document.createElement('div');
+      body.className = 'panel-section-body';
+      body.appendChild(section.content);
+
+      // Click toggles open/close
+      header.addEventListener('click', () => {
+        wrapper.classList.toggle('open');
       });
 
-      tabBar.appendChild(btn);
+      wrapper.appendChild(header);
+      wrapper.appendChild(body);
+      scrollArea.appendChild(wrapper);
+    }
 
-      // Tab content
-      if (i !== 0) tab.content.style.display = 'none';
-      tabContents.appendChild(tab.content);
-    });
-
-    this.container.appendChild(tabBar);
-    this.container.appendChild(tabContents);
+    this.container.appendChild(scrollArea);
   }
 
   updateDataInfo(data: HypergraphData): void {
@@ -134,46 +140,64 @@ const PANEL_CSS = `
   border-bottom: 1px solid #e0e0e5;
 }
 
-/* ── Tab Bar ── */
-.panel-tab-bar {
-  display: flex;
-  border-bottom: 1px solid #e0e0e5;
-  background: #f8f8fa;
-  flex-shrink: 0;
-}
-
-.panel-tab-btn {
-  flex: 1;
-  padding: 9px 4px;
-  border: none;
-  background: transparent;
-  color: #888898;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  transition: color 0.15s, border-color 0.15s;
-}
-
-.panel-tab-btn:hover {
-  color: #555570;
-}
-
-.panel-tab-btn.active {
-  color: #2a2a3e;
-  border-bottom-color: #5577cc;
-}
-
-/* ── Tab Content ── */
-.panel-tab-contents {
+/* ── Accordion Sections ── */
+.panel-sections {
   flex: 1;
   overflow-y: auto;
   padding-bottom: 20px;
 }
 
-.panel-tab-content {
-  padding: 12px 14px;
+.panel-section {
+  border-bottom: 1px solid #e0e0e5;
+}
+
+.panel-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.panel-section-header:hover {
+  background: #f0f0f5;
+}
+
+.panel-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555570;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.panel-section.open .panel-section-label {
+  color: #2a2a3e;
+}
+
+.panel-section-chevron {
+  font-size: 8px;
+  color: #999;
+  transition: transform 0.25s ease;
+}
+
+.panel-section.open .panel-section-chevron {
+  transform: rotate(90deg);
+}
+
+.panel-section-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+
+.panel-section.open .panel-section-body {
+  max-height: 600px;
+}
+
+.panel-section-body > * {
+  padding: 0 14px 12px;
 }
 
 /* ── Section Header ── */
@@ -187,7 +211,7 @@ const PANEL_CSS = `
   border-bottom: 1px solid #e0e0e5;
 }
 
-.panel-tab-content .ctrl-section-header:first-child {
+.panel-section-body .ctrl-section-header:first-child {
   margin-top: 4px;
 }
 
@@ -477,20 +501,20 @@ const PANEL_CSS = `
 }
 
 /* ── Scrollbar ── */
-.panel-tab-contents::-webkit-scrollbar {
+.panel-sections::-webkit-scrollbar {
   width: 6px;
 }
 
-.panel-tab-contents::-webkit-scrollbar-track {
+.panel-sections::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.panel-tab-contents::-webkit-scrollbar-thumb {
+.panel-sections::-webkit-scrollbar-thumb {
   background: #d0d0d8;
   border-radius: 3px;
 }
 
-.panel-tab-contents::-webkit-scrollbar-thumb:hover {
+.panel-sections::-webkit-scrollbar-thumb:hover {
   background: #b0b0c0;
 }
 `;
