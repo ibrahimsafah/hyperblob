@@ -251,6 +251,7 @@ export function stitchContours(segments: Segment[]): Vec2[][] {
 }
 
 // ── Ear-clipping triangulation ──
+// Uses a doubly-linked index list to avoid array allocations in the inner loop.
 
 function cross2d(o: Vec2, a: Vec2, b: Vec2): number {
   return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
@@ -265,72 +266,114 @@ function pointInTriangle(p: Vec2, a: Vec2, b: Vec2, c: Vec2): boolean {
   return !(hasNeg && hasPos);
 }
 
-function isEar(polygon: Vec2[], prev: number, curr: number, next: number): boolean {
-  const a = polygon[prev];
-  const b = polygon[curr];
-  const c = polygon[next];
+/**
+ * Try fan-triangulation from centroid. Returns null if polygon is not star-convex.
+ * O(n) — used as fast path before falling back to ear-clip.
+ */
+export function fanTriangulateFromCentroid(polygon: Vec2[]): Vec2[] | null {
+  const n = polygon.length;
+  if (n < 3) return null;
 
-  // Must be convex (CCW turn)
-  if (cross2d(a, b, c) <= 0) return false;
+  // Compute centroid
+  let cx = 0, cy = 0;
+  for (let i = 0; i < n; i++) {
+    cx += polygon[i][0];
+    cy += polygon[i][1];
+  }
+  cx /= n;
+  cy /= n;
 
-  // No other vertex inside the triangle
-  for (let i = 0; i < polygon.length; i++) {
-    if (i === prev || i === curr || i === next) continue;
-    if (pointInTriangle(polygon[i], a, b, c)) return false;
+  const triangles: Vec2[] = [];
+  const centroid: Vec2 = [cx, cy];
+
+  for (let i = 0; i < n; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % n];
+    // Check winding: centroid → a → b should be CCW (positive cross product)
+    const cross = (a[0] - cx) * (b[1] - cy) - (a[1] - cy) * (b[0] - cx);
+    if (cross <= 0) return null; // Not star-convex from centroid
+    triangles.push(centroid, a, b);
   }
 
-  return true;
+  return triangles;
 }
 
 export function earClipTriangulate(polygon: Vec2[]): Vec2[] {
-  if (polygon.length < 3) return [];
-  if (polygon.length === 3) return [polygon[0], polygon[1], polygon[2]];
+  const n = polygon.length;
+  if (n < 3) return [];
+  if (n === 3) return [polygon[0], polygon[1], polygon[2]];
 
   // Ensure CCW winding
   let area = 0;
-  for (let i = 0; i < polygon.length; i++) {
-    const j = (i + 1) % polygon.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
     area += polygon[i][0] * polygon[j][1];
     area -= polygon[j][0] * polygon[i][1];
   }
-  const indices = Array.from({ length: polygon.length }, (_, i) => i);
-  if (area < 0) indices.reverse(); // CW → reverse to CCW
+  const ccw = area >= 0;
+
+  // Build doubly-linked list of polygon indices (no allocations during clipping)
+  const prev = new Int32Array(n);
+  const next = new Int32Array(n);
+  if (ccw) {
+    for (let i = 0; i < n; i++) {
+      prev[i] = (i === 0) ? n - 1 : i - 1;
+      next[i] = (i === n - 1) ? 0 : i + 1;
+    }
+  } else {
+    // Reverse winding via reversed linked list
+    for (let i = 0; i < n; i++) {
+      next[i] = (i === 0) ? n - 1 : i - 1;
+      prev[i] = (i === n - 1) ? 0 : i + 1;
+    }
+  }
 
   const triangles: Vec2[] = [];
-  const remaining = [...indices];
+  let remaining = n;
+  let current = 0;
   let failCount = 0;
 
-  while (remaining.length > 3 && failCount < remaining.length) {
-    let earFound = false;
-    for (let i = 0; i < remaining.length; i++) {
-      const prev = (i === 0) ? remaining.length - 1 : i - 1;
-      const next = (i + 1) % remaining.length;
+  while (remaining > 3 && failCount < remaining) {
+    const pi = prev[current];
+    const ni = next[current];
+    const a = polygon[pi];
+    const b = polygon[current];
+    const c = polygon[ni];
 
-      if (isEar(
-        remaining.map(idx => polygon[idx]),
-        prev, i, next,
-      )) {
-        triangles.push(
-          polygon[remaining[prev]],
-          polygon[remaining[i]],
-          polygon[remaining[next]],
-        );
-        remaining.splice(i, 1);
-        earFound = true;
-        failCount = 0;
-        break;
+    // Check if this vertex is an ear
+    let isEar = cross2d(a, b, c) > 0; // must be convex (CCW turn)
+
+    if (isEar) {
+      // Check no other vertex falls inside the triangle
+      let check = next[ni];
+      while (check !== pi) {
+        if (pointInTriangle(polygon[check], a, b, c)) {
+          isEar = false;
+          break;
+        }
+        check = next[check];
       }
     }
-    if (!earFound) failCount++;
+
+    if (isEar) {
+      triangles.push(a, b, c);
+      // Remove current from linked list
+      next[pi] = ni;
+      prev[ni] = pi;
+      remaining--;
+      current = ni;
+      failCount = 0;
+    } else {
+      current = next[current];
+      failCount++;
+    }
   }
 
   // Last triangle
-  if (remaining.length === 3) {
-    triangles.push(
-      polygon[remaining[0]],
-      polygon[remaining[1]],
-      polygon[remaining[2]],
-    );
+  if (remaining === 3) {
+    const pi = prev[current];
+    const ni = next[current];
+    triangles.push(polygon[pi], polygon[current], polygon[ni]);
   }
 
   return triangles;
@@ -433,20 +476,24 @@ export function computeMST(points: Vec2[]): [number, number][] {
 /**
  * Overlay capsule-Gaussian field along MST edges onto an existing scalar grid.
  * This guarantees the metaball blob stays connected even when nodes are far apart.
+ * Bridge sigma scales with edge length to prevent pinch-off during node drag.
  */
 export function addBridgeField(grid: ScalarGrid, points: Vec2[], sigma: number): void {
   const mstEdges = computeMST(points);
   if (mstEdges.length === 0) return;
 
   const { values, cols, rows, originX, originY, cellSize } = grid;
-  // Adaptive sigma: ensure bridges are at least ~5 cells wide on coarse grids
-  const bridgeSigma = Math.max(sigma, cellSize * 2.5);
-  const invTwoSigmaSq = 1 / (2 * bridgeSigma * bridgeSigma);
-  const cutoff = 3 * bridgeSigma;
+  const baseSigma = Math.max(sigma, cellSize * 2.5);
 
   for (const [ai, bi] of mstEdges) {
     const ax = points[ai][0], ay = points[ai][1];
     const bx = points[bi][0], by = points[bi][1];
+
+    // Scale bridge sigma with edge length so long bridges stay wide enough
+    const edgeLen = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
+    const bridgeSigma = Math.max(baseSigma, edgeLen * 0.12);
+    const invTwoSigmaSq = 1 / (2 * bridgeSigma * bridgeSigma);
+    const cutoff = 3 * bridgeSigma;
 
     // Bounding box of segment + cutoff margin → grid cell range
     const segMinX = Math.min(ax, bx) - cutoff;
@@ -472,16 +519,6 @@ export function addBridgeField(grid: ScalarGrid, points: Vec2[], sigma: number):
   }
 }
 
-// ── Circle for singleton ──
-
-export function circlePolygon(center: Vec2, radius: number, segments = 24): Vec2[] {
-  const verts: Vec2[] = [];
-  for (let i = 0; i < segments; i++) {
-    const angle = (2 * Math.PI * i) / segments;
-    verts.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)]);
-  }
-  return verts;
-}
 
 // ── Main entry point ──
 
@@ -492,18 +529,7 @@ export function computeMetaballHull(
   resolution: number,
   smoothIters: number,
 ): MetaballResult | null {
-  if (nodes.length === 0) return null;
-
-  // Singleton → analytical circle
-  if (nodes.length === 1) {
-    // Solve exp(-r²/(2σ²)) = threshold → r = σ * sqrt(-2 ln(threshold))
-    const r = (threshold > 0 && threshold < 1)
-      ? sigma * Math.sqrt(-2 * Math.log(threshold))
-      : sigma;
-    const verts = circlePolygon(nodes[0], r);
-    const tris = earClipTriangulate(verts);
-    return { vertices: verts, triangles: tris, centroid: [nodes[0][0], nodes[0][1]] };
-  }
+  if (nodes.length < 2) return null;
 
   const grid = buildScalarGrid(nodes, sigma, resolution);
   addBridgeField(grid, nodes, sigma);
@@ -542,6 +568,6 @@ export function computeMetaballHull(
   cx /= smoothed.length;
   cy /= smoothed.length;
 
-  const triangles = earClipTriangulate(smoothed);
+  const triangles = fanTriangulateFromCentroid(smoothed) ?? earClipTriangulate(smoothed);
   return { vertices: smoothed, triangles, centroid: [cx, cy] };
 }

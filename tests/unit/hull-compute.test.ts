@@ -83,15 +83,11 @@ describe('HullCompute', () => {
     expect(hulls).toBeDefined();
   });
 
-  it('singleton generates a circle', () => {
+  it('singleton is skipped (no hull for single-member edges)', () => {
     const positions = makePositions([[5, 5]]);
     const edges = [makeEdge(0, [0])];
     const hulls = hullCompute.computeHulls(positions, edges, 10);
-    expect(hulls).toHaveLength(1);
-    expect(hulls[0].vertices.length).toBeGreaterThanOrEqual(12);
-    expect(hulls[0].centroid[0]).toBeCloseTo(5, 1);
-    expect(hulls[0].centroid[1]).toBeCloseTo(5, 1);
-    expect(hulls[0].triangles.length).toBeGreaterThan(0);
+    expect(hulls).toHaveLength(0);
   });
 
   it('two points generates a capsule', () => {

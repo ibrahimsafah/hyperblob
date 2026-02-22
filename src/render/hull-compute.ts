@@ -59,17 +59,6 @@ function convexHull(points: Vec2[]): Vec2[] {
 
 // ── Shape generators ──
 
-/**
- * Generate a circle shape for a single-node hyperedge.
- */
-function circleShape(center: Vec2, radius: number, segments = 16): Vec2[] {
-  const verts: Vec2[] = [];
-  for (let i = 0; i < segments; i++) {
-    const angle = (2 * Math.PI * i) / segments;
-    verts.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)]);
-  }
-  return verts;
-}
 
 /**
  * Chaikin corner-cutting subdivision for closed polygons.
@@ -141,7 +130,6 @@ function paddedConvexHull(points: Vec2[], margin: number): Vec2[] {
 export class HullCompute {
   /**
    * Compute hulls for all hyperedges.
-   *  - 1 member  → circle
    *  - 2 members → capsule (stadium)
    *  - 3+ members → padded convex hull + Chaikin smoothing
    */
@@ -155,7 +143,7 @@ export class HullCompute {
     const effectiveMargin = Math.max(margin, 1);
 
     for (const he of hyperedges) {
-      if (he.memberIndices.length < 1) continue;
+      if (he.memberIndices.length < 2) continue;
 
       // Extract member positions
       const points: Vec2[] = [];
@@ -165,17 +153,11 @@ export class HullCompute {
       }
 
       const centroid = computeCentroid(points);
-      let shape: Vec2[];
 
-      if (he.memberIndices.length === 1) {
-        // Singleton → circle
-        shape = circleShape(points[0], effectiveMargin);
-      } else {
-        // 2+ members → padded convex hull + smoothing
-        const hull = paddedConvexHull(points, effectiveMargin);
-        if (hull.length < 3) continue;
-        shape = chaikinSmooth(hull, smoothIterations);
-      }
+      // 2+ members → padded convex hull + smoothing
+      const hull = paddedConvexHull(points, effectiveMargin);
+      if (hull.length < 3) continue;
+      const shape = chaikinSmooth(hull, smoothIterations);
 
       const triangles = fanTriangulate(centroid, shape);
       results.push({

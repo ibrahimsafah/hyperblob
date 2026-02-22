@@ -1,6 +1,6 @@
 // GPU-accelerated metaball hull computation
 // Evaluates Gaussian scalar field on GPU, then runs marching squares + triangulation on CPU
-// Produces HullData[] compatible with the existing hull rendering pipeline
+// Uses double-buffered readback: dispatch frame N while processing frame N-1's data
 
 import type { GPUContext } from '../gpu/device';
 import type { BufferManager } from '../gpu/buffer-manager';
@@ -12,14 +12,25 @@ import {
   marchingSquares,
   stitchContours,
   chaikinSmooth,
-  circlePolygon,
   addBridgeField,
   earClipTriangulate,
+  fanTriangulateFromCentroid,
 } from './metaball-hull';
 import shaderCode from '../shaders/metaball-field.wgsl?raw';
 
 const GRID_SIZE = 64;
 const CELLS_PER_EDGE = GRID_SIZE * GRID_SIZE; // 4096
+
+/** Snapshot of state needed to process a readback on the CPU */
+interface PendingReadback {
+  promise: Promise<Float32Array>;
+  gpuEdges: { he: HyperedgeData; points: Vec2[] }[];
+  edgeMetas: Float32Array;
+  edgeCount: number;
+  threshold: number;
+  smoothIters: number;
+  sigma: number;
+}
 
 export class MetaballCompute {
   private gpu: GPUContext;
@@ -29,6 +40,15 @@ export class MetaballCompute {
 
   // Persistent buffers (recreated when edge count changes)
   private lastEdgeCount = 0;
+
+  // Pre-allocated params buffer backing
+  private paramsBackingBuffer = new ArrayBuffer(16);
+  private paramsF32 = new Float32Array(this.paramsBackingBuffer, 0, 1);
+  private paramsU32 = new Uint32Array(this.paramsBackingBuffer, 4, 3);
+  private paramsView = new Uint8Array(this.paramsBackingBuffer);
+
+  // Double-buffer: pending readback from previous dispatch
+  private pending: PendingReadback | null = null;
 
   constructor(gpu: GPUContext, buffers: BufferManager) {
     this.gpu = gpu;
@@ -67,6 +87,12 @@ export class MetaballCompute {
     );
   }
 
+  /**
+   * Double-buffered metaball computation:
+   * 1. If there's a pending readback from last call, process it (CPU marching squares)
+   * 2. Dispatch new GPU work and start async readback (non-blocking)
+   * 3. Return the results from step 1 (or empty on first call)
+   */
   async computeMetaballHulls(
     positions: Float32Array,
     hyperedges: HyperedgeData[],
@@ -74,38 +100,44 @@ export class MetaballCompute {
     threshold: number,
     smoothIters: number,
   ): Promise<HullData[]> {
-    // Filter to non-empty edges and separate singletons
+    // ── Phase 1: Process previous frame's readback (if any) ──
+    const previousResults = this.pending
+      ? await this.processPendingReadback(this.pending)
+      : [];
+
+    // ── Phase 2: Dispatch new GPU work ──
+    this.pending = this.dispatchNewFrame(positions, hyperedges, margin, threshold, smoothIters);
+
+    return previousResults;
+  }
+
+  /** Dispatch GPU field computation and start non-blocking readback */
+  private dispatchNewFrame(
+    positions: Float32Array,
+    hyperedges: HyperedgeData[],
+    margin: number,
+    threshold: number,
+    smoothIters: number,
+  ): PendingReadback | null {
+    // Filter to edges with 2+ members (singletons don't need hulls)
     const gpuEdges: { he: HyperedgeData; points: Vec2[] }[] = [];
-    const results: HullData[] = [];
+    const sigma = Math.max(margin, 5);
 
     for (const he of hyperedges) {
-      if (he.memberIndices.length === 0) continue;
+      if (he.memberIndices.length < 2) continue;
 
       const points: Vec2[] = [];
       for (const ni of he.memberIndices) {
         points.push([positions[ni * 4], positions[ni * 4 + 1]]);
       }
-
-      if (he.memberIndices.length === 1) {
-        // Singleton → analytical circle (CPU, no GPU needed)
-        const r = (threshold > 0 && threshold < 1)
-          ? margin * Math.sqrt(-2 * Math.log(threshold))
-          : margin;
-        const verts = circlePolygon(points[0], Math.max(r, 5));
-        const centroid: Vec2 = [points[0][0], points[0][1]];
-        const triangles = fanTriangulate(centroid, verts);
-        results.push({ vertices: verts, centroid, hyperedgeIndex: he.index, triangles });
-      } else {
-        gpuEdges.push({ he, points });
-      }
+      gpuEdges.push({ he, points });
     }
 
-    if (gpuEdges.length === 0) return results;
+    if (gpuEdges.length === 0) return null;
 
     // ── CPU: compute bounding boxes & edge metadata ──
-    const sigma = Math.max(margin, 5);
     const edgeCount = gpuEdges.length;
-    const edgeMetas = new Float32Array(edgeCount * 4); // [origin_x, origin_y, cell_size, pad]
+    const edgeMetas = new Float32Array(edgeCount * 4);
 
     for (let i = 0; i < edgeCount; i++) {
       const pts = gpuEdges[i].points;
@@ -127,14 +159,14 @@ export class MetaballCompute {
       edgeMetas[i * 4 + 0] = minX;
       edgeMetas[i * 4 + 1] = minY;
       edgeMetas[i * 4 + 2] = cellSize;
-      edgeMetas[i * 4 + 3] = 0; // pad
+      edgeMetas[i * 4 + 3] = 0;
     }
 
     // ── GPU: allocate/resize buffers ──
     if (edgeCount !== this.lastEdgeCount) {
       this.buffers.createBuffer(
         'metaball-edge-metas',
-        edgeCount * 4 * 4, // 4 floats × 4 bytes each
+        edgeCount * 4 * 4,
         GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         'metaball-edge-metas',
       );
@@ -150,11 +182,12 @@ export class MetaballCompute {
     // Upload edge metadata
     this.buffers.uploadData('metaball-edge-metas', edgeMetas);
 
-    // Write params: [sigma: f32, grid_size: u32, edge_count: u32, _pad: u32]
-    const paramsData = new ArrayBuffer(16);
-    new Float32Array(paramsData, 0, 1)[0] = sigma;
-    new Uint32Array(paramsData, 4, 3).set([GRID_SIZE, edgeCount, 0]);
-    this.buffers.uploadData('metaball-params', new Uint8Array(paramsData));
+    // Write params (reuse pre-allocated backing buffer)
+    this.paramsF32[0] = sigma;
+    this.paramsU32[0] = GRID_SIZE;
+    this.paramsU32[1] = edgeCount;
+    this.paramsU32[2] = 0;
+    this.buffers.uploadData('metaball-params', this.paramsView);
 
     // ── GPU: dispatch ──
     const totalThreads = edgeCount * CELLS_PER_EDGE;
@@ -180,11 +213,20 @@ export class MetaballCompute {
     pass.end();
     this.gpu.device.queue.submit([encoder.finish()]);
 
-    // ── GPU→CPU: readback ──
+    // Start async readback (non-blocking — returns promise, doesn't await)
     const gridSize = edgeCount * CELLS_PER_EDGE * 4;
-    const gridData = await this.buffers.readBuffer('metaball-grid-out', gridSize);
+    const promise = this.buffers.readBuffer('metaball-grid-out', gridSize);
 
-    // ── CPU: marching squares per edge ──
+    return { promise, gpuEdges, edgeMetas, edgeCount, threshold, smoothIters, sigma };
+  }
+
+  /** Process a completed readback: marching squares + triangulation on CPU */
+  private async processPendingReadback(pending: PendingReadback): Promise<HullData[]> {
+    const { gpuEdges, edgeMetas, edgeCount, threshold, smoothIters, sigma } = pending;
+    const results: HullData[] = [];
+
+    const gridData = await pending.promise;
+
     for (let i = 0; i < edgeCount; i++) {
       const { he } = gpuEdges[i];
       const metaBase = i * 4;
@@ -192,12 +234,9 @@ export class MetaballCompute {
       const originY = edgeMetas[metaBase + 1];
       const cellSize = edgeMetas[metaBase + 2];
 
-      // Build ScalarGrid from GPU output slice
+      // Use subarray view instead of copying (avoid allocation)
       const gridOffset = i * CELLS_PER_EDGE;
-      const values = new Float32Array(CELLS_PER_EDGE);
-      for (let j = 0; j < CELLS_PER_EDGE; j++) {
-        values[j] = gridData[gridOffset + j];
-      }
+      const values = gridData.subarray(gridOffset, gridOffset + CELLS_PER_EDGE);
 
       const grid: ScalarGrid = {
         values,
@@ -234,10 +273,8 @@ export class MetaballCompute {
         }
       }
 
-      // Smooth the contour
       const smoothed = chaikinSmooth(best, smoothIters);
 
-      // Compute centroid
       let cx = 0, cy = 0;
       for (const p of smoothed) {
         cx += p[0];
@@ -246,9 +283,9 @@ export class MetaballCompute {
       cx /= smoothed.length;
       cy /= smoothed.length;
 
-      // Ear-clip handles concave bridge tendrils correctly (fan-triangulate
-      // only works for star-convex shapes, which bridges break)
-      const triangles = earClipTriangulate(smoothed);
+      // Fast path: fan-triangulation O(n) for star-convex contours
+      // Fallback: ear-clip O(n²) for concave bridge tendrils
+      const triangles = fanTriangulateFromCentroid(smoothed) ?? earClipTriangulate(smoothed);
       results.push({
         vertices: smoothed,
         centroid: [cx, cy],
@@ -261,6 +298,7 @@ export class MetaballCompute {
   }
 
   destroy(): void {
+    this.pending = null;
     this.buffers.destroyBuffer('metaball-edge-metas');
     this.buffers.destroyBuffer('metaball-grid-out');
     this.buffers.destroyBuffer('metaball-params');
@@ -268,12 +306,3 @@ export class MetaballCompute {
   }
 }
 
-// Fan-triangulate a polygon from its centroid (same as hull-compute.ts)
-function fanTriangulate(centroid: Vec2, hull: Vec2[]): Vec2[] {
-  const triangles: Vec2[] = [];
-  const n = hull.length;
-  for (let i = 0; i < n; i++) {
-    triangles.push(centroid, hull[i], hull[(i + 1) % n]);
-  }
-  return triangles;
-}

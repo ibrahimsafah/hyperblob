@@ -5,7 +5,6 @@ import {
   stitchContours,
   earClipTriangulate,
   chaikinSmooth,
-  circlePolygon,
   computeMetaballHull,
   computeMST,
   distToSegmentSq,
@@ -226,31 +225,6 @@ describe('chaikinSmooth', () => {
   });
 });
 
-// ── circlePolygon ──
-
-describe('circlePolygon', () => {
-  it('generates correct number of segments', () => {
-    const circle = circlePolygon([5, 5], 10, 16);
-    expect(circle).toHaveLength(16);
-  });
-
-  it('all points are at correct radius', () => {
-    const center: Vec2 = [3, 7];
-    const radius = 5;
-    const circle = circlePolygon(center, radius, 32);
-    for (const p of circle) {
-      const dx = p[0] - center[0];
-      const dy = p[1] - center[1];
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      expect(dist).toBeCloseTo(radius, 5);
-    }
-  });
-
-  it('default segment count is 24', () => {
-    const circle = circlePolygon([0, 0], 1);
-    expect(circle).toHaveLength(24);
-  });
-});
 
 // ── computeMetaballHull (full CPU pipeline) ──
 
@@ -260,12 +234,9 @@ describe('computeMetaballHull', () => {
     expect(result).toBeNull();
   });
 
-  it('returns circle for singleton', () => {
+  it('returns null for singleton (no hull for single-member edges)', () => {
     const result = computeMetaballHull([[5, 5]], 10, 0.5, 64, 2);
-    expect(result).not.toBeNull();
-    expect(result!.vertices.length).toBeGreaterThanOrEqual(20);
-    expect(result!.centroid[0]).toBeCloseTo(5, 1);
-    expect(result!.centroid[1]).toBeCloseTo(5, 1);
+    expect(result).toBeNull();
   });
 
   it('produces hull for cluster of nodes', () => {
