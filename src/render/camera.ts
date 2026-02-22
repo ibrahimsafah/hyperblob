@@ -11,10 +11,14 @@ export class Camera {
   private projectionDirty = true;
   private cachedProjection: Mat4 = new Float32Array(16);
 
+  /** Increments on every camera mutation. Consumers compare against their last-seen version to skip redundant uploads. */
+  version = 0;
+
   resize(width: number, height: number): void {
     this.width = width;
     this.height = height;
     this.projectionDirty = true;
+    this.version++;
   }
 
   getProjection(): Mat4 {
@@ -35,6 +39,7 @@ export class Camera {
     this.center[0] -= dx / this.zoom;
     this.center[1] += dy / this.zoom;
     this.projectionDirty = true;
+    this.version++;
   }
 
   zoomAt(screenX: number, screenY: number, factor: number): void {
@@ -44,6 +49,7 @@ export class Camera {
     this.center[0] += worldBefore[0] - worldAfter[0];
     this.center[1] += worldBefore[1] - worldAfter[1];
     this.projectionDirty = true;
+    this.version++;
   }
 
   screenToWorld(sx: number, sy: number): Vec2 {
@@ -66,6 +72,7 @@ export class Camera {
     const scaleY = this.height / (h * (1 + padding));
     this.zoom = Math.max(this.minZoom, Math.min(this.maxZoom, Math.min(scaleX, scaleY)));
     this.projectionDirty = true;
+    this.version++;
   }
 
   getViewportWidth(): number { return this.width; }
