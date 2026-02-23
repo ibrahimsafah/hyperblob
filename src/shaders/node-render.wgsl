@@ -42,6 +42,19 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
   let corner_index = vertex_index % 6u;
 
   let base = node_index * 4u; // 4 floats per node: x, y, vx, vy
+
+  // Check visibility flag (bit 0 of flags = hidden)
+  let flags = metadata[node_index * 2u + 1u];
+  if ((flags & 1u) != 0u) {
+    // Hidden node — move offscreen to avoid fragment shader work
+    var out: VertexOutput;
+    out.position = vec4<f32>(10000.0, 10000.0, 0.0, 1.0);
+    out.uv = vec2<f32>(0.0, 0.0);
+    out.color = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    out.node_index = node_index;
+    return out;
+  }
+
   let world_pos = vec2<f32>(positions[base], positions[base + 1u]);
 
   let uv = QUAD_UVS[corner_index];

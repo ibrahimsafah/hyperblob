@@ -127,6 +127,42 @@ export class EdgeRenderer {
     this.recreateBindGroup();
   }
 
+  /**
+   * Rebuild edge-draw-indices with only the visible edges.
+   * When visibleEdges is null, all edges are shown (same as setData).
+   */
+  setVisibleEdges(data: HypergraphData, visibleEdges: Set<number> | null): void {
+    let totalSegments = 0;
+    for (const he of data.hyperedges) {
+      if (visibleEdges === null || visibleEdges.has(he.index)) {
+        totalSegments += he.memberIndices.length;
+      }
+    }
+
+    this.totalLineSegments = totalSegments;
+    if (totalSegments === 0) return;
+
+    const drawData = new Uint32Array(totalSegments * 2);
+    let offset = 0;
+    for (const he of data.hyperedges) {
+      if (visibleEdges !== null && !visibleEdges.has(he.index)) continue;
+      for (const memberIdx of he.memberIndices) {
+        drawData[offset++] = he.index;
+        drawData[offset++] = memberIdx;
+      }
+    }
+
+    // Reuse existing buffer if large enough, otherwise recreate
+    if (!this.buffers.hasBuffer('edge-draw-indices') || drawData.byteLength > this.buffers.getBuffer('edge-draw-indices').size) {
+      this.buffers.createBuffer(
+        'edge-draw-indices', drawData.byteLength,
+        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'edge-draw-indices',
+      );
+      this.recreateBindGroup();
+    }
+    this.buffers.uploadData('edge-draw-indices', drawData);
+  }
+
   private recreateBindGroup(): void {
     if (!this.pipeline || !this.cameraBuffer || !this.edgeParamsBuffer) return;
     if (!this.buffers.hasBuffer('node-positions')) return;

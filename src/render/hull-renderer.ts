@@ -38,6 +38,12 @@ export class HullRenderer {
   private outlineBufferCapacity = 0; // in bytes
   private outlineVertexCount = 0;
 
+  // Edge visibility filter (null = show all)
+  private visibleEdges: Set<number> | null = null;
+
+  // Cached hull polygons for hit testing
+  private lastHulls: HullData[] = [];
+
   // Recompute throttling
   private frameCounter = 0;
   private readonly recomputeInterval = 10;
@@ -150,8 +156,14 @@ export class HullRenderer {
 
   setData(data: HypergraphData): void {
     this.hypergraphData = data;
+    this.visibleEdges = null;
     this.needsRecompute = true;
     this.frameCounter = 0;
+  }
+
+  setVisibleEdges(visibleEdges: Set<number> | null): void {
+    this.visibleEdges = visibleEdges;
+    this.forceRecompute();
   }
 
   private async recomputeHulls(renderParams: RenderParams): Promise<void> {
@@ -163,6 +175,11 @@ export class HullRenderer {
       const nodeCount = this.hypergraphData.nodes.length;
       const positionData = await this.buffers.readBuffer('node-positions', nodeCount * 16);
 
+      // Filter hyperedges if a selection is active
+      const edges = this.visibleEdges !== null
+        ? this.hypergraphData.hyperedges.filter(he => this.visibleEdges!.has(he.index))
+        : this.hypergraphData.hyperedges;
+
       let hulls: HullData[];
 
       if (renderParams.hullMode === 'metaball') {
@@ -170,7 +187,7 @@ export class HullRenderer {
         this.metaballCompute ??= new MetaballCompute(this.gpu, this.buffers);
         hulls = await this.metaballCompute.computeMetaballHulls(
           positionData,
-          this.hypergraphData.hyperedges,
+          edges,
           renderParams.hullMargin,
           renderParams.hullMetaballThreshold,
           renderParams.hullSmoothing,
@@ -178,11 +195,13 @@ export class HullRenderer {
       } else {
         hulls = this.hullCompute.computeHulls(
           positionData,
-          this.hypergraphData.hyperedges,
+          edges,
           renderParams.hullMargin,
           renderParams.hullSmoothing,
         );
       }
+
+      this.lastHulls = hulls;
 
       this.buildFillVertices(hulls, renderParams.hullAlpha);
       if (renderParams.hullOutline) {
@@ -297,6 +316,28 @@ export class HullRenderer {
 
   forceRecompute(): void {
     this.needsRecompute = true;
+  }
+
+  /** Point-in-polygon hit test against cached hulls (ray-casting algorithm).
+   *  Tests in reverse order so the topmost (last-rendered) hull wins. */
+  hitTest(worldX: number, worldY: number): number | null {
+    for (let h = this.lastHulls.length - 1; h >= 0; h--) {
+      const verts = this.lastHulls[h].vertices;
+      const n = verts.length;
+      if (n < 3) continue;
+
+      let inside = false;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const xi = verts[i][0], yi = verts[i][1];
+        const xj = verts[j][0], yj = verts[j][1];
+        if ((yi > worldY) !== (yj > worldY) &&
+            worldX < (xj - xi) * (worldY - yi) / (yj - yi) + xi) {
+          inside = !inside;
+        }
+      }
+      if (inside) return this.lastHulls[h].hyperedgeIndex;
+    }
+    return null;
   }
 
   render(renderPass: GPURenderPassEncoder, renderParams: RenderParams): void {

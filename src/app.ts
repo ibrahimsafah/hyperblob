@@ -4,6 +4,7 @@ import { Camera } from './render/camera';
 import { Stats } from './utils/stats';
 import { getPaletteColors } from './utils/color';
 import { type HypergraphData, type SimulationParams, type RenderParams, defaultSimulationParams, defaultRenderParams } from './data/types';
+import { Tooltip } from './ui/tooltip';
 import nodeShaderCode from './shaders/node-render.wgsl?raw';
 
 export class App {
@@ -17,6 +18,10 @@ export class App {
 
   private graphData: HypergraphData | null = null;
   private nodeCount = 0;
+
+  // Selection state (neighborhood filter)
+  private selectedNode: number | null = null;
+  private visibleNodes: Set<number> | null = null;
 
   // Node drag state
   private cpuPositions: Float32Array | null = null;
@@ -50,6 +55,10 @@ export class App {
   private simulation: { tick(params: SimulationParams): void } | null = null;
   private panelInstance: { updateDataInfo(data: HypergraphData): void } | null = null;
 
+  private tooltip: Tooltip;
+  private lastHoveredNode: number | null = null;
+  private lastHoveredEdge: number | null = null;
+
   private running = false;
   private disposed = false;
 
@@ -58,6 +67,7 @@ export class App {
     this.buffers = new BufferManager(gpu.device);
     this.camera = new Camera();
     this.stats = new Stats(gpu.canvas.parentElement!);
+    this.tooltip = new Tooltip(gpu.canvas.parentElement!);
     this.simParams = defaultSimulationParams();
     this.renderParams = defaultRenderParams();
   }
@@ -131,6 +141,46 @@ export class App {
           this.dragTargetPos = null;
           this.dragSmoothPos = null;
           this.dragPrevPos = null;
+        },
+        onClick: (nodeIndex: number | null) => {
+          if (nodeIndex === null || nodeIndex === this.selectedNode) {
+            // Click empty space or toggle off — clear selection
+            this.selectedNode = null;
+          } else {
+            this.selectedNode = nodeIndex;
+          }
+          this.applySelection();
+        },
+        onHoverNode: (nodeIndex: number | null, screenX: number, screenY: number) => {
+          if (nodeIndex === this.lastHoveredNode) return;
+          this.lastHoveredNode = nodeIndex;
+          if (nodeIndex === null || !this.graphData) {
+            // Only hide if there's no edge hover taking over
+            if (this.lastHoveredEdge === null) this.tooltip.hide();
+            return;
+          }
+          // Find all edges this node belongs to
+          const node = this.graphData.nodes[nodeIndex];
+          const edgeLabels = this.graphData.hyperedges
+            .filter(he => he.memberIndices.includes(nodeIndex))
+            .map(he => String(he.attrs?.name ?? he.attrs?.label ?? `Edge ${he.id}`));
+          const nodeLabel = String(node?.attrs?.name ?? node?.attrs?.label ?? node?.id ?? `#${nodeIndex}`);
+          this.tooltip.showNode(screenX, screenY, nodeLabel, edgeLabels);
+        },
+        hitTestEdge: (wx: number, wy: number) => this.hitTestEdge(wx, wy),
+        onHoverEdge: (edgeIndex: number | null, screenX: number, screenY: number) => {
+          if (edgeIndex === this.lastHoveredEdge) return;
+          this.lastHoveredEdge = edgeIndex;
+          if (edgeIndex === null || !this.graphData) {
+            // Only hide if there's no node hover active
+            if (this.lastHoveredNode === null) this.tooltip.hide();
+            return;
+          }
+          const he = this.graphData.hyperedges[edgeIndex];
+          if (!he) { this.tooltip.hide(); return; }
+          const label = String(he.attrs?.name ?? he.attrs?.label ?? `Edge ${he.id}`);
+          const members = he.memberIndices.map(i => this.graphData!.nodes[i]?.id ?? `#${i}`);
+          this.tooltip.show(screenX, screenY, label, members);
         },
       });
     }
@@ -245,6 +295,8 @@ export class App {
   setData(data: HypergraphData): void {
     this.graphData = data;
     this.nodeCount = data.nodes.length;
+    this.selectedNode = null;
+    this.visibleNodes = null;
 
     // Upload positions: [x, y, vx, vy] per node — random initial positions
     const positions = new Float32Array(data.nodes.length * 4);
@@ -523,6 +575,66 @@ export class App {
   getNodeCount(): number { return this.nodeCount; }
   getGraphData(): HypergraphData | null { return this.graphData; }
 
+  private applySelection(): void {
+    if (!this.graphData || !this.buffers.hasBuffer('node-metadata')) return;
+
+    if (this.selectedNode === null) {
+      // Clear all filters — show everything
+      this.visibleNodes = null;
+      const metadata = new Uint32Array(this.nodeCount * 2);
+      for (let i = 0; i < this.nodeCount; i++) {
+        metadata[i * 2] = this.graphData.nodes[i].group;
+        metadata[i * 2 + 1] = 0; // clear hidden flag
+      }
+      this.buffers.uploadData('node-metadata', metadata);
+
+      if (this.instances.edgeRenderer) {
+        this.instances.edgeRenderer.setVisibleEdges(this.graphData, null);
+      }
+      if (this.instances.hullRenderer) {
+        this.instances.hullRenderer.setVisibleEdges(null);
+      }
+    } else {
+      // Compute neighborhood: edges containing the selected node, and all their members
+      const visibleEdges = new Set<number>();
+      const visibleNodes = new Set<number>();
+      visibleNodes.add(this.selectedNode);
+
+      for (const he of this.graphData.hyperedges) {
+        if (he.memberIndices.includes(this.selectedNode)) {
+          visibleEdges.add(he.index);
+          for (const idx of he.memberIndices) {
+            visibleNodes.add(idx);
+          }
+        }
+      }
+      this.visibleNodes = visibleNodes;
+
+      // Update node-metadata flags: bit 0 = hidden
+      const metadata = new Uint32Array(this.nodeCount * 2);
+      for (let i = 0; i < this.nodeCount; i++) {
+        metadata[i * 2] = this.graphData.nodes[i].group;
+        metadata[i * 2 + 1] = visibleNodes.has(i) ? 0 : 1;
+      }
+      this.buffers.uploadData('node-metadata', metadata);
+
+      if (this.instances.edgeRenderer) {
+        this.instances.edgeRenderer.setVisibleEdges(this.graphData, visibleEdges);
+      }
+      if (this.instances.hullRenderer) {
+        this.instances.hullRenderer.setVisibleEdges(visibleEdges);
+      }
+    }
+
+    // Hide tooltip since visible edges changed
+    this.tooltip.hide();
+    this.lastHoveredEdge = null;
+  }
+
+  private hitTestEdge(worldX: number, worldY: number): number | null {
+    return this.instances.hullRenderer?.hitTest(worldX, worldY) ?? null;
+  }
+
   private hitTestNode(worldX: number, worldY: number): number | null {
     if (!this.cpuPositions || this.nodeCount === 0) return null;
     // Convert pixel-space node size to world-space radius, with extra margin for easier clicking
@@ -530,6 +642,8 @@ export class App {
     let bestDist = hitRadius;
     let bestIndex: number | null = null;
     for (let i = 0; i < this.nodeCount; i++) {
+      // Skip hidden nodes during hit testing
+      if (this.visibleNodes !== null && !this.visibleNodes.has(i)) continue;
       const nx = this.cpuPositions[i * 4];
       const ny = this.cpuPositions[i * 4 + 1];
       const dx = worldX - nx;

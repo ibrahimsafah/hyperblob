@@ -5,6 +5,10 @@ export interface NodeDragCallbacks {
   onDragStart(nodeIndex: number): void;
   onDrag(nodeIndex: number, worldX: number, worldY: number): void;
   onDragEnd(nodeIndex: number): void;
+  onClick?(nodeIndex: number | null): void;
+  onHoverNode?(nodeIndex: number | null, screenX: number, screenY: number): void;
+  hitTestEdge?(worldX: number, worldY: number): number | null;
+  onHoverEdge?(edgeIndex: number | null, screenX: number, screenY: number): void;
 }
 
 export class InputHandler {
@@ -13,6 +17,8 @@ export class InputHandler {
   private dragging = false;
   private draggedNode: number | null = null;
   private nodeDrag: NodeDragCallbacks | null;
+  private mousedownPos: { x: number; y: number } | null = null;
+  private mousedownNodeIndex: number | null = null;
   private lastTouchDist = 0;
   private lastTouchCenter: [number, number] = [0, 0];
   private boundHandlers: Array<[string, EventListener, EventListenerOptions?]> = [];
@@ -38,6 +44,7 @@ export class InputHandler {
     // Mouse drag to pan (or drag node)
     on('mousedown', (e: MouseEvent) => {
       if (e.button === 0) {
+        this.mousedownPos = { x: e.offsetX, y: e.offsetY };
         // Try node hit test first
         if (this.nodeDrag) {
           const dpr = window.devicePixelRatio || 1;
@@ -45,11 +52,13 @@ export class InputHandler {
           const nodeIndex = this.nodeDrag.hitTest(wx, wy);
           if (nodeIndex !== null) {
             this.draggedNode = nodeIndex;
+            this.mousedownNodeIndex = nodeIndex;
             this.nodeDrag.onDragStart(nodeIndex);
             this.canvas.style.cursor = 'grabbing';
             return;
           }
         }
+        this.mousedownNodeIndex = null;
         this.dragging = true;
       }
     });
@@ -67,17 +76,40 @@ export class InputHandler {
         const dpr = window.devicePixelRatio || 1;
         const [wx, wy] = this.camera.screenToWorld(e.offsetX * dpr, e.offsetY * dpr);
         const nodeIndex = this.nodeDrag.hitTest(wx, wy);
-        this.canvas.style.cursor = nodeIndex !== null ? 'grab' : '';
+        if (nodeIndex !== null) {
+          this.canvas.style.cursor = 'grab';
+          this.nodeDrag.onHoverNode?.(nodeIndex, e.offsetX, e.offsetY);
+          this.nodeDrag.onHoverEdge?.(null, e.offsetX, e.offsetY);
+        } else {
+          this.nodeDrag.onHoverNode?.(null, e.offsetX, e.offsetY);
+          // No node hit — try edge hull hit test
+          const edgeIndex = this.nodeDrag.hitTestEdge?.(wx, wy) ?? null;
+          this.canvas.style.cursor = edgeIndex !== null ? 'pointer' : '';
+          this.nodeDrag.onHoverEdge?.(edgeIndex, e.offsetX, e.offsetY);
+        }
       }
     });
 
-    on('mouseup', () => {
+    on('mouseup', (e: MouseEvent) => {
+      // Detect click vs drag: if mouse moved < 4px, it's a click
+      const isClick = this.mousedownPos !== null &&
+        Math.abs(e.offsetX - this.mousedownPos.x) < 4 &&
+        Math.abs(e.offsetY - this.mousedownPos.y) < 4;
+
       if (this.draggedNode !== null && this.nodeDrag) {
         this.nodeDrag.onDragEnd(this.draggedNode);
+        if (isClick) {
+          this.nodeDrag.onClick?.(this.mousedownNodeIndex);
+        }
         this.draggedNode = null;
         this.canvas.style.cursor = '';
+      } else if (isClick && this.nodeDrag) {
+        // Clicked empty space
+        this.nodeDrag.onClick?.(null);
       }
       this.dragging = false;
+      this.mousedownPos = null;
+      this.mousedownNodeIndex = null;
     });
 
     on('mouseleave', () => {
@@ -86,6 +118,7 @@ export class InputHandler {
         this.draggedNode = null;
         this.canvas.style.cursor = '';
       }
+      this.nodeDrag?.onHoverEdge?.(null, 0, 0);
       this.dragging = false;
     });
 
