@@ -20,7 +20,8 @@ const PALETTE: [number, number, number, number][] = [
   [0.659, 0.471, 0.710, 1.0], // purple
 ];
 
-export function getPaletteColors(): Float32Array {
+export function getPaletteColors(custom?: Float32Array): Float32Array {
+  if (custom) return custom;
   const data = new Float32Array(PALETTE.length * 4);
   for (let i = 0; i < PALETTE.length; i++) {
     data[i * 4 + 0] = PALETTE[i][0];

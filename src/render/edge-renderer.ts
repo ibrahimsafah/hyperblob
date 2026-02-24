@@ -22,6 +22,7 @@ export class EdgeRenderer {
   private totalLineSegments = 0;
   private lastCameraVersion = -1;
   private edgeParamsArray = new Float32Array(4);
+  private edgeCount = 0;
 
   constructor(gpu: GPUContext, buffers: BufferManager, camera: Camera) {
     this.gpu = gpu;
@@ -48,6 +49,7 @@ export class EdgeRenderer {
         { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // he_offsets
         { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // he_members
         { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },            // edge params
+        { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },  // edge_flags
       ],
     });
 
@@ -96,6 +98,8 @@ export class EdgeRenderer {
    * One pair per line segment (centroid -> member).
    */
   setData(data: HypergraphData): void {
+    this.edgeCount = data.hyperedges.length;
+
     // Count total line segments: sum of member counts across all hyperedges
     let totalSegments = 0;
     for (const he of data.hyperedges) {
@@ -122,6 +126,14 @@ export class EdgeRenderer {
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'edge-draw-indices',
     );
     this.buffers.uploadData('edge-draw-indices', drawData);
+
+    // Create edge-flags buffer (one u32 per hyperedge, all zeros = no dimming)
+    const flagsSize = Math.max(data.hyperedges.length * 4, 4);
+    this.buffers.createBuffer(
+      'edge-flags', flagsSize,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'edge-flags',
+    );
+    this.buffers.uploadData('edge-flags', new Uint32Array(data.hyperedges.length));
 
     // Recreate bind group with new buffers
     this.recreateBindGroup();
@@ -163,12 +175,25 @@ export class EdgeRenderer {
     this.buffers.uploadData('edge-draw-indices', drawData);
   }
 
+  /** Set dimmed edges — dimmed edges render at 12% alpha. Pass null to clear. */
+  setDimmedEdges(dimmedSet: Set<number> | null): void {
+    if (!this.buffers.hasBuffer('edge-flags') || this.edgeCount === 0) return;
+    const flags = new Uint32Array(this.edgeCount);
+    if (dimmedSet) {
+      for (const idx of dimmedSet) {
+        if (idx < this.edgeCount) flags[idx] = 1;
+      }
+    }
+    this.buffers.uploadData('edge-flags', flags);
+  }
+
   private recreateBindGroup(): void {
     if (!this.pipeline || !this.cameraBuffer || !this.edgeParamsBuffer) return;
     if (!this.buffers.hasBuffer('node-positions')) return;
     if (!this.buffers.hasBuffer('edge-draw-indices')) return;
     if (!this.buffers.hasBuffer('he-offsets')) return;
     if (!this.buffers.hasBuffer('he-members')) return;
+    if (!this.buffers.hasBuffer('edge-flags')) return;
 
     this.bindGroup = this.gpu.device.createBindGroup({
       label: 'edge-bind-group',
@@ -180,6 +205,7 @@ export class EdgeRenderer {
         { binding: 3, resource: { buffer: this.buffers.getBuffer('he-offsets') } },
         { binding: 4, resource: { buffer: this.buffers.getBuffer('he-members') } },
         { binding: 5, resource: { buffer: this.edgeParamsBuffer } },
+        { binding: 6, resource: { buffer: this.buffers.getBuffer('edge-flags') } },
       ],
     });
   }

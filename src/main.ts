@@ -1,4 +1,3 @@
-import { initWebGPU } from './gpu/device';
 import { App } from './app';
 
 async function main(): Promise<void> {
@@ -8,10 +7,8 @@ async function main(): Promise<void> {
   }
 
   try {
-    const gpu = await initWebGPU(canvas);
-    const app = new App(gpu);
-    await app.init();
-    app.start();
+    const app = await App.create(canvas);
+    app.engine.start();
 
     // Expose for debugging
     (window as any).__app = app;

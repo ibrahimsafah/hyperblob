@@ -19,6 +19,7 @@ struct EdgeParams {
 @group(0) @binding(3) var<storage, read> he_offsets: array<u32>;      // CSR offsets
 @group(0) @binding(4) var<storage, read> he_members: array<u32>;      // CSR members
 @group(0) @binding(5) var<uniform> edge_params: EdgeParams;
+@group(0) @binding(6) var<storage, read> edge_flags: array<u32>;  // per-hyperedge flags (bit 0 = dimmed)
 
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
@@ -59,10 +60,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
   let clip_pos = camera.projection * vec4<f32>(world_pos, 0.0, 1.0);
 
+  // Compute base alpha — centroid endpoints slightly more transparent
+  var base_alpha = select(edge_params.opacity * 0.5, edge_params.opacity, is_member == 1u);
+
+  // Per-edge dim flag: reduce alpha for dimmed edges
+  let flags = edge_flags[he_index];
+  if ((flags & 1u) != 0u) {
+    base_alpha = base_alpha * 0.12;
+  }
+
   var out: VertexOutput;
   out.position = clip_pos;
-  // Centroid vertices are slightly more transparent than member endpoints
-  out.alpha = select(edge_params.opacity * 0.5, edge_params.opacity, is_member == 1u);
+  out.alpha = base_alpha;
   return out;
 }
 

@@ -3,10 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "dist/lib/hyperblob.js",
+  "types": "dist/lib/types.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/lib/hyperblob.js",
+      "types": "./dist/lib/types.d.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:wasm && tsc && vite build",
     "build:wasm": "wat2wasm src/wasm/metaball-contour.wat -o src/wasm/metaball-contour.wasm",
+    "build:lib": "npm run build:wasm && tsc && vite build --mode lib",
+    "build:app": "npm run build:wasm && tsc && vite build",
+    "build": "npm run build:lib && npm run build:app",
     "preview": "vite preview",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",

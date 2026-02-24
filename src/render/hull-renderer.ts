@@ -40,6 +40,8 @@ export class HullRenderer {
 
   // Edge visibility filter (null = show all)
   private visibleEdges: Set<number> | null = null;
+  // Dimmed edges (render at reduced alpha)
+  private dimmedEdgeSet: Set<number> | null = null;
 
   // Cached hull polygons for hit testing
   private lastHulls: HullData[] = [];
@@ -166,6 +168,12 @@ export class HullRenderer {
     this.forceRecompute();
   }
 
+  /** Set dimmed edges — dimmed hulls render at reduced alpha. Pass null to clear. */
+  setDimmedEdges(dimmedSet: Set<number> | null): void {
+    this.dimmedEdgeSet = dimmedSet;
+    this.forceRecompute();
+  }
+
   private async recomputeHulls(renderParams: RenderParams): Promise<void> {
     if (this.isRecomputing) return; // prevent concurrent recomputes (race condition)
     if (!this.hypergraphData || !this.buffers.hasBuffer('node-positions')) return;
@@ -233,6 +241,9 @@ export class HullRenderer {
 
     for (const hull of hulls) {
       const color = getPaletteColor(hull.hyperedgeIndex);
+      // Dimmed edges render at 8% of normal alpha (matching BSM's SVG behavior)
+      const isDimmed = this.dimmedEdgeSet !== null && this.dimmedEdgeSet.has(hull.hyperedgeIndex);
+      const hullAlpha = isDimmed ? alpha * 0.08 : alpha;
 
       for (const vertex of hull.triangles) {
         data[offset++] = vertex[0]; // x
@@ -240,7 +251,7 @@ export class HullRenderer {
         data[offset++] = color[0];  // r
         data[offset++] = color[1];  // g
         data[offset++] = color[2];  // b
-        data[offset++] = alpha;     // a
+        data[offset++] = hullAlpha; // a
       }
     }
 
@@ -277,6 +288,8 @@ export class HullRenderer {
 
     for (const hull of hulls) {
       const color = getPaletteColor(hull.hyperedgeIndex);
+      const isDimmed = this.dimmedEdgeSet !== null && this.dimmedEdgeSet.has(hull.hyperedgeIndex);
+      const hullOutlineAlpha = isDimmed ? outlineAlpha * 0.15 : outlineAlpha;
       const n = hull.vertices.length;
 
       for (let i = 0; i < n; i++) {
@@ -287,7 +300,7 @@ export class HullRenderer {
         data[offset++] = color[0];
         data[offset++] = color[1];
         data[offset++] = color[2];
-        data[offset++] = outlineAlpha;
+        data[offset++] = hullOutlineAlpha;
 
         // End vertex of line segment
         data[offset++] = hull.vertices[next][0];
@@ -295,7 +308,7 @@ export class HullRenderer {
         data[offset++] = color[0];
         data[offset++] = color[1];
         data[offset++] = color[2];
-        data[offset++] = outlineAlpha;
+        data[offset++] = hullOutlineAlpha;
       }
     }
 

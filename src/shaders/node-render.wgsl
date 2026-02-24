@@ -77,6 +77,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     color = vec4<f32>(0.12, 0.12, 0.14, 1.0);
   }
 
+  // Dim flag (bit 1): reduce alpha for non-highlighted nodes
+  if ((flags & 2u) != 0u) {
+    color = vec4<f32>(color.rgb, color.a * 0.12);
+  }
+
   var out: VertexOutput;
   out.position = vec4<f32>(clip_pos.xy + ndc_offset, clip_pos.z, clip_pos.w);
   out.uv = uv;
