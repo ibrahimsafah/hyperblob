@@ -14,6 +14,12 @@ import {
 } from './data/types';
 import nodeShaderCode from './shaders/node-render.wgsl?raw';
 
+// Static imports for all engine-required modules (bundled into library)
+import { ForceSimulation } from './layout/force-simulation';
+import { InputHandler } from './interaction/input-handler';
+import { EdgeRenderer } from './render/edge-renderer';
+import { HullRenderer } from './render/hull-renderer';
+
 // ── Public option types ──
 
 export interface HyperblobOptions {
@@ -70,13 +76,11 @@ export class HyperblobEngine {
   private renderParamsArray = new Float32Array(4);
   private lastCameraVersion = -1;
 
-  // Dynamically loaded modules
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private modules: Record<string, any> = {};
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private instances: Record<string, any> = {};
-
-  private simulation: { tick(params: SimulationParams): void } | null = null;
+  // Sub-module instances (statically imported, instantiated on setData)
+  private inputHandlerInstance: InputHandler | null = null;
+  private edgeRendererInstance: EdgeRenderer | null = null;
+  private hullRendererInstance: HullRenderer | null = null;
+  private simulation: ForceSimulation | null = null;
   private tooltip: Tooltip | null = null;
   private lastHoveredNode: number | null = null;
   private lastHoveredEdge: number | null = null;
@@ -110,8 +114,6 @@ export class HyperblobEngine {
     this.handleResize();
     window.addEventListener('resize', () => this.handleResize());
 
-    await this.loadModules();
-
     // Setup palette buffer (custom or default)
     const paletteData = this.options.palette ?? getPaletteColors();
     this.paletteBuffer = this.buffers.createBuffer(
@@ -134,35 +136,10 @@ export class HyperblobEngine {
     this.setupInputHandler();
   }
 
-  private async loadModules(): Promise<void> {
-    const loads: [string, string][] = [
-      ['hifLoader', './data/hif-loader'],
-      ['generator', './data/generator'],
-      ['forceSimulation', './layout/force-simulation'],
-      ['renderer', './render/renderer'],
-      ['inputHandler', './interaction/input-handler'],
-      ['hullCompute', './render/hull-compute'],
-      ['hullRenderer', './render/hull-renderer'],
-      ['edgeRenderer', './render/edge-renderer'],
-      ['nodePicker', './interaction/node-picker'],
-    ];
-
-    await Promise.all(loads.map(async ([key, path]) => {
-      try {
-        this.modules[key] = await import(/* @vite-ignore */ path);
-      } catch {
-        // Module not built yet
-      }
-    }));
-  }
-
   private setupInputHandler(): void {
-    if (!this.modules.inputHandler) return;
-
-    const { InputHandler } = this.modules.inputHandler;
     const opts = this.options;
 
-    this.instances.inputHandler = new InputHandler(this.gpu.canvas, this.camera, {
+    this.inputHandlerInstance = new InputHandler(this.gpu.canvas, this.camera, {
       hitTest: (wx: number, wy: number) => this.hitTestNode(wx, wy),
       onDragStart: (nodeIndex: number) => {
         this.draggedNodeIndex = nodeIndex;
@@ -369,28 +346,19 @@ export class HyperblobEngine {
     this.createNodeBindGroup();
 
     // Setup edge renderer
-    if (this.modules.edgeRenderer && !this.instances.edgeRenderer) {
-      this.instances.edgeRenderer = new this.modules.edgeRenderer.EdgeRenderer(this.gpu, this.buffers, this.camera);
+    if (!this.edgeRendererInstance) {
+      this.edgeRendererInstance = new EdgeRenderer(this.gpu, this.buffers, this.camera);
     }
-    if (this.instances.edgeRenderer) {
-      this.instances.edgeRenderer.setData(data);
-    }
+    this.edgeRendererInstance.setData(data);
 
-    // Setup hull compute + renderer
-    if (this.modules.hullCompute && !this.instances.hullCompute) {
-      this.instances.hullCompute = new this.modules.hullCompute.HullCompute();
+    // Setup hull renderer
+    if (!this.hullRendererInstance) {
+      this.hullRendererInstance = new HullRenderer(this.gpu, this.buffers, this.camera);
     }
-    if (this.modules.hullRenderer && !this.instances.hullRenderer) {
-      this.instances.hullRenderer = new this.modules.hullRenderer.HullRenderer(this.gpu, this.buffers, this.camera);
-    }
-    if (this.instances.hullRenderer) {
-      this.instances.hullRenderer.setData(data);
-    }
+    this.hullRendererInstance.setData(data);
 
     // Setup force simulation
-    if (this.modules.forceSimulation) {
-      this.simulation = new this.modules.forceSimulation.ForceSimulation(this.gpu.device, this.buffers, data, this.simParams);
-    }
+    this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams);
 
     this.simParams.alpha = 1.0;
     this.simParams.running = true;
@@ -407,9 +375,7 @@ export class HyperblobEngine {
   dispose(): void {
     this.disposed = true;
     this.running = false;
-    if (this.instances.inputHandler?.dispose) {
-      this.instances.inputHandler.dispose();
-    }
+    this.inputHandlerInstance?.dispose();
     this.buffers.destroyAll();
   }
 
@@ -473,13 +439,13 @@ export class HyperblobEngine {
     this.buffers.uploadData('node-metadata', metadata);
 
     // Dim edges via edge renderer
-    if (this.instances.edgeRenderer?.setDimmedEdges) {
-      this.instances.edgeRenderer.setDimmedEdges(dimmedEdges);
+    if (this.edgeRendererInstance?.setDimmedEdges) {
+      this.edgeRendererInstance.setDimmedEdges(dimmedEdges);
     }
 
     // Dim hulls via hull renderer
-    if (this.instances.hullRenderer?.setDimmedEdges) {
-      this.instances.hullRenderer.setDimmedEdges(dimmedEdges);
+    if (this.hullRendererInstance?.setDimmedEdges) {
+      this.hullRendererInstance.setDimmedEdges(dimmedEdges);
     }
   }
 
@@ -508,11 +474,11 @@ export class HyperblobEngine {
     }
     this.buffers.uploadData('node-metadata', metadata);
 
-    if (this.instances.edgeRenderer?.setDimmedEdges) {
-      this.instances.edgeRenderer.setDimmedEdges(null);
+    if (this.edgeRendererInstance?.setDimmedEdges) {
+      this.edgeRendererInstance.setDimmedEdges(null);
     }
-    if (this.instances.hullRenderer?.setDimmedEdges) {
-      this.instances.hullRenderer.setDimmedEdges(null);
+    if (this.hullRendererInstance?.setDimmedEdges) {
+      this.hullRendererInstance.setDimmedEdges(null);
     }
   }
 
@@ -537,11 +503,11 @@ export class HyperblobEngine {
       }
       this.buffers.uploadData('node-metadata', metadata);
 
-      if (this.instances.edgeRenderer) {
-        this.instances.edgeRenderer.setVisibleEdges(this.graphData, null);
+      if (this.edgeRendererInstance) {
+        this.edgeRendererInstance.setVisibleEdges(this.graphData, null);
       }
-      if (this.instances.hullRenderer) {
-        this.instances.hullRenderer.setVisibleEdges(null);
+      if (this.hullRendererInstance) {
+        this.hullRendererInstance.setVisibleEdges(null);
       }
     } else {
       // Apply filter
@@ -571,11 +537,11 @@ export class HyperblobEngine {
       }
       this.buffers.uploadData('node-metadata', metadata);
 
-      if (this.instances.edgeRenderer) {
-        this.instances.edgeRenderer.setVisibleEdges(this.graphData, visibleEdges);
+      if (this.edgeRendererInstance) {
+        this.edgeRendererInstance.setVisibleEdges(this.graphData, visibleEdges);
       }
-      if (this.instances.hullRenderer) {
-        this.instances.hullRenderer.setVisibleEdges(visibleEdges);
+      if (this.hullRendererInstance) {
+        this.hullRendererInstance.setVisibleEdges(visibleEdges);
       }
     }
   }
@@ -659,8 +625,8 @@ export class HyperblobEngine {
       });
     }
 
-    if (this.instances.hullRenderer && (this.draggedNodeIndex !== null || this.simParams.alpha > 0.05)) {
-      this.instances.hullRenderer.forceRecompute();
+    if (this.hullRendererInstance && (this.draggedNodeIndex !== null || this.simParams.alpha > 0.05)) {
+      this.hullRendererInstance.forceRecompute();
     }
 
     this.render();
@@ -696,12 +662,12 @@ export class HyperblobEngine {
       }],
     });
 
-    if (this.instances.hullRenderer && this.renderParams.hullAlpha > 0) {
-      this.instances.hullRenderer.render(renderPass, this.renderParams);
+    if (this.hullRendererInstance && this.renderParams.hullAlpha > 0) {
+      this.hullRendererInstance.render(renderPass, this.renderParams);
     }
 
-    if (this.instances.edgeRenderer && this.renderParams.edgeOpacity > 0) {
-      this.instances.edgeRenderer.render(renderPass, this.renderParams);
+    if (this.edgeRendererInstance && this.renderParams.edgeOpacity > 0) {
+      this.edgeRendererInstance.render(renderPass, this.renderParams);
     }
 
     if (this.nodeRenderPipeline && this.nodeBindGroup && this.nodeCount > 0) {
@@ -728,11 +694,11 @@ export class HyperblobEngine {
       }
       this.buffers.uploadData('node-metadata', metadata);
 
-      if (this.instances.edgeRenderer) {
-        this.instances.edgeRenderer.setVisibleEdges(this.graphData, null);
+      if (this.edgeRendererInstance) {
+        this.edgeRendererInstance.setVisibleEdges(this.graphData, null);
       }
-      if (this.instances.hullRenderer) {
-        this.instances.hullRenderer.setVisibleEdges(null);
+      if (this.hullRendererInstance) {
+        this.hullRendererInstance.setVisibleEdges(null);
       }
     } else {
       const visibleEdges = new Set<number>();
@@ -756,11 +722,11 @@ export class HyperblobEngine {
       }
       this.buffers.uploadData('node-metadata', metadata);
 
-      if (this.instances.edgeRenderer) {
-        this.instances.edgeRenderer.setVisibleEdges(this.graphData, visibleEdges);
+      if (this.edgeRendererInstance) {
+        this.edgeRendererInstance.setVisibleEdges(this.graphData, visibleEdges);
       }
-      if (this.instances.hullRenderer) {
-        this.instances.hullRenderer.setVisibleEdges(visibleEdges);
+      if (this.hullRendererInstance) {
+        this.hullRendererInstance.setVisibleEdges(visibleEdges);
       }
     }
 
@@ -803,7 +769,7 @@ export class HyperblobEngine {
   // ── Internal: hit testing ──
 
   private hitTestEdge(worldX: number, worldY: number): number | null {
-    return this.instances.hullRenderer?.hitTest(worldX, worldY) ?? null;
+    return this.hullRendererInstance?.hitTest(worldX, worldY) ?? null;
   }
 
   private hitTestNode(worldX: number, worldY: number): number | null {
