@@ -11,6 +11,7 @@ export class App {
   private stats: Stats;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private panelInstance: any = null;
+  private disposed = false;
 
   private constructor(engine: HyperblobEngine, stats: Stats) {
     this.engine = engine;
@@ -90,10 +91,16 @@ export class App {
 
   private startStatsLoop(): void {
     const loop = () => {
-      if (!this.engine) return;
+      if (this.disposed) return;
       this.stats.update();
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.panelInstance?.dispose();
+    this.panelInstance = null;
   }
 }

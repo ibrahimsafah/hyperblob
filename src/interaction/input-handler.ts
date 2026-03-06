@@ -118,6 +118,7 @@ export class InputHandler {
         this.draggedNode = null;
         this.canvas.style.cursor = '';
       }
+      this.nodeDrag?.onHoverNode?.(null, 0, 0);
       this.nodeDrag?.onHoverEdge?.(null, 0, 0);
       this.dragging = false;
     });

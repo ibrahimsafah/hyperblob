@@ -1,6 +1,15 @@
 // Lightweight HTML tooltip for hyperedge hover info
 // Positioned near cursor, shows edge name + member nodes
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export class Tooltip {
   private el: HTMLDivElement;
 
@@ -27,12 +36,13 @@ export class Tooltip {
   }
 
   show(x: number, y: number, label: string, members: string[]): void {
-    const memberText = members.length <= 5
-      ? members.join(', ')
-      : members.slice(0, 3).join(', ') + `, +${members.length - 3} more`;
+    const escaped = members.map(escapeHtml);
+    const memberText = escaped.length <= 5
+      ? escaped.join(', ')
+      : escaped.slice(0, 3).join(', ') + `, +${members.length - 3} more`;
 
     this.el.innerHTML =
-      `<div style="font-weight:600;margin-bottom:2px">${label}</div>` +
+      `<div style="font-weight:600;margin-bottom:2px">${escapeHtml(label)}</div>` +
       `<div style="color:#666680">${memberText}</div>`;
 
     this.el.style.display = 'block';
@@ -40,14 +50,15 @@ export class Tooltip {
   }
 
   showNode(x: number, y: number, nodeLabel: string, edges: string[]): void {
-    const edgeText = edges.length === 0
+    const escaped = edges.map(escapeHtml);
+    const edgeText = escaped.length === 0
       ? '<span style="color:#999">no edges</span>'
-      : edges.length <= 5
-        ? edges.join(', ')
-        : edges.slice(0, 4).join(', ') + `, +${edges.length - 4} more`;
+      : escaped.length <= 5
+        ? escaped.join(', ')
+        : escaped.slice(0, 4).join(', ') + `, +${edges.length - 4} more`;
 
     this.el.innerHTML =
-      `<div style="font-weight:600;margin-bottom:2px">${nodeLabel}</div>` +
+      `<div style="font-weight:600;margin-bottom:2px">${escapeHtml(nodeLabel)}</div>` +
       `<div style="color:#666680">${edgeText}</div>`;
 
     this.el.style.display = 'block';

@@ -25,6 +25,7 @@ interface SectionDef {
 export class Panel {
   private container: HTMLElement;
   private dataTabHandle: { updateDataInfo(data: HypergraphData): void } | null = null;
+  private disposers: Array<() => void> = [];
 
   constructor(container: HTMLElement, config: PanelConfig) {
     this.container = container;
@@ -33,6 +34,9 @@ export class Panel {
   }
 
   private build(config: PanelConfig): void {
+    // Clear any running timers from previous build
+    this.disposeTabTimers();
+
     this.container.innerHTML = '';
 
     // Title
@@ -42,11 +46,12 @@ export class Panel {
     this.container.appendChild(title);
 
     // Build tabs
-    const simTab = createSimulationTab(
+    const simTabResult = createSimulationTab(
       config.simParams,
       config.onSimulationToggle,
       config.onSimulationReset,
     );
+    this.disposers.push(simTabResult.dispose);
 
     const renderTab = createRenderingTab(config.renderParams);
 
@@ -56,13 +61,14 @@ export class Panel {
     );
     this.dataTabHandle = dataTabResult;
 
-    const cameraTab = createCameraTab(config.camera, config.onFitToScreen);
+    const cameraTabResult = createCameraTab(config.camera, config.onFitToScreen);
+    this.disposers.push(cameraTabResult.dispose);
 
     const sections: SectionDef[] = [
-      { label: 'Simulation', content: simTab, defaultOpen: true },
+      { label: 'Simulation', content: simTabResult.el, defaultOpen: true },
       { label: 'Rendering', content: renderTab, defaultOpen: true },
       { label: 'Data', content: dataTabResult.el, defaultOpen: false },
-      { label: 'Camera', content: cameraTab, defaultOpen: false },
+      { label: 'Camera', content: cameraTabResult.el, defaultOpen: false },
     ];
 
     // Scrollable wrapper for all sections
@@ -109,6 +115,17 @@ export class Panel {
 
   updateDataInfo(data: HypergraphData): void {
     this.dataTabHandle?.updateDataInfo(data);
+  }
+
+  dispose(): void {
+    this.disposeTabTimers();
+    this.container.innerHTML = '';
+    this.dataTabHandle = null;
+  }
+
+  private disposeTabTimers(): void {
+    for (const fn of this.disposers) fn();
+    this.disposers = [];
   }
 
   private injectStyles(): void {

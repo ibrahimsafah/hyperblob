@@ -65,8 +65,9 @@ export class Camera {
   }
 
   fitBounds(minX: number, minY: number, maxX: number, maxY: number, padding = 0.1): void {
-    const w = maxX - minX;
-    const h = maxY - minY;
+    const minExtent = 100.0;
+    const w = Math.max(maxX - minX, minExtent);
+    const h = Math.max(maxY - minY, minExtent);
     this.center = [(minX + maxX) / 2, (minY + maxY) / 2];
     const scaleX = this.width / (w * (1 + padding));
     const scaleY = this.height / (h * (1 + padding));

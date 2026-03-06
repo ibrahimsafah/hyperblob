@@ -60,10 +60,18 @@ export function generateRandomHypergraph(
     });
   }
 
-  // Ensure every node is in at least one hyperedge
+  // Ensure every node is in at least one hyperedge.
+  // If total capacity across all edges is less than nodeCount, not every node
+  // can fit without overflowing maxEdgeSize. Expand maxEdgeSize preemptively so
+  // the invariant "every node appears in at least one edge" is always satisfied.
+  const totalCapacity = edgeCount * maxEdgeSize;
+  if (totalCapacity < nodeCount) {
+    maxEdgeSize = Math.ceil(nodeCount / edgeCount);
+  }
+
   for (let i = 0; i < nodeCount; i++) {
     if (!nodeInEdge[i]) {
-      // Find an edge that hasn't exceeded maxEdgeSize, or pick a random one
+      // Find an edge that hasn't reached maxEdgeSize yet.
       let heIdx = Math.floor(Math.random() * edgeCount);
       for (let attempt = 0; attempt < edgeCount; attempt++) {
         const candidate = (heIdx + attempt) % edgeCount;

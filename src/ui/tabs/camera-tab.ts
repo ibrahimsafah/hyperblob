@@ -4,7 +4,7 @@ import { createButton, createInfoDisplay, createSectionHeader } from '../control
 export function createCameraTab(
   camera: Camera,
   onFitToScreen: () => void,
-): HTMLElement {
+): { el: HTMLElement; dispose: () => void } {
   const tab = document.createElement('div');
   tab.className = 'panel-tab-content';
 
@@ -20,11 +20,15 @@ export function createCameraTab(
   tab.appendChild(centerYInfo.el);
 
   // Update periodically
-  setInterval(() => {
+  const statsInterval = setInterval(() => {
     zoomInfo.update(camera.zoom.toFixed(3));
     centerXInfo.update(camera.center[0].toFixed(1));
     centerYInfo.update(camera.center[1].toFixed(1));
   }, 150);
+
+  const dispose = () => {
+    clearInterval(statsInterval);
+  };
 
   // -- Actions section --
   tab.appendChild(createSectionHeader('Actions'));
@@ -75,5 +79,5 @@ export function createCameraTab(
     },
   }));
 
-  return tab;
+  return { el: tab, dispose };
 }

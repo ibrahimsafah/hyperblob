@@ -387,15 +387,25 @@ export class HyperblobEngine {
 
   handleResize(): void {
     const canvas = this.gpu.canvas;
-    const container = canvas.parentElement!;
+    const container = canvas.parentElement;
+    if (!container) return;
     const dpr = window.devicePixelRatio || 1;
-    const width = container.clientWidth;
-    const height = container.clientHeight;
+    const width = Math.max(container.clientWidth, 1);
+    const height = Math.max(container.clientHeight, 1);
 
     canvas.width = width * dpr;
     canvas.height = height * dpr;
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
+
+    // Reconfigure after dimension change — Chrome/Dawn (IOSurface backend)
+    // can produce "texture view associated with [Device]" errors if the
+    // context is not reconfigured after the canvas buffer changes.
+    this.gpu.context.configure({
+      device: this.gpu.device,
+      format: this.gpu.format,
+      alphaMode: 'premultiplied',
+    });
 
     this.camera.resize(width * dpr, height * dpr);
   }
@@ -567,6 +577,7 @@ export class HyperblobEngine {
       positions[i * 4 + 1] = (Math.random() - 0.5) * spread;
     }
     this.buffers.uploadData('node-positions', positions);
+    this.cpuPositions = new Float32Array(positions);
   }
 
   async fitToScreen(): Promise<void> {
@@ -629,12 +640,23 @@ export class HyperblobEngine {
       this.hullRendererInstance.forceRecompute();
     }
 
-    this.render();
+    try {
+      this.render();
+    } catch (e) {
+      // GPU validation errors (device lost, stale texture, etc.) — stop the
+      // loop instead of spamming 250 identical console errors per second.
+      console.error('WebGPU render error — stopping render loop:', e);
+      this.running = false;
+      return;
+    }
     requestAnimationFrame(this.tick);
   };
 
   private render(): void {
-    const { device, context } = this.gpu;
+    const { device, context, canvas } = this.gpu;
+
+    // Skip frame if canvas has no pixels (container hidden / not laid out)
+    if (canvas.width === 0 || canvas.height === 0) return;
 
     if (this.cameraBuffer && this.camera.version !== this.lastCameraVersion) {
       this.lastCameraVersion = this.camera.version;
@@ -649,7 +671,9 @@ export class HyperblobEngine {
       device.queue.writeBuffer(this.paramsBuffer, 0, this.renderParamsArray);
     }
 
-    const textureView = context.getCurrentTexture().createView();
+    const texture = context.getCurrentTexture();
+    if (texture.width === 0 || texture.height === 0) return;
+    const textureView = texture.createView();
     const bg = this.renderParams.backgroundColor;
     const commandEncoder = device.createCommandEncoder();
 

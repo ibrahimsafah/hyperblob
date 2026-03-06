@@ -62,10 +62,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       // Expand bounding box
       let child_min_x = tree[child_base + 6u];
       let child_min_y = tree[child_base + 7u];
+      let child_size = tree[child_base + 3u];
       min_x = min(min_x, child_min_x);
       min_y = min(min_y, child_min_y);
-      max_x = max(max_x, cx);
-      max_y = max(max_y, cy);
+      max_x = max(max_x, child_min_x + child_size);
+      max_y = max(max_y, child_min_y + child_size);
     }
   }
 

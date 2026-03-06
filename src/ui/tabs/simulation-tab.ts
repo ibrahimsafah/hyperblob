@@ -5,7 +5,7 @@ export function createSimulationTab(
   simParams: SimulationParams,
   onToggle: (running: boolean) => void,
   onReset: () => void,
-): HTMLElement {
+): { el: HTMLElement; dispose: () => void } {
   const tab = document.createElement('div');
   tab.className = 'panel-tab-content';
 
@@ -75,8 +75,9 @@ export function createSimulationTab(
     alphaValue.textContent = simParams.alpha.toFixed(3);
   }, 100);
 
-  // Store interval for cleanup (accessible via data attribute)
-  tab.setAttribute('data-alpha-interval', String(alphaUpdateInterval));
+  const dispose = () => {
+    clearInterval(alphaUpdateInterval);
+  };
 
   // -- Force parameters section --
   tab.appendChild(createSectionHeader('Forces'));
@@ -160,5 +161,5 @@ export function createSimulationTab(
     },
   }));
 
-  return tab;
+  return { el: tab, dispose };
 }
