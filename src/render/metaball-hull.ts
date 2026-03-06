@@ -598,6 +598,6 @@ export function computeMetaballHull(
   cx /= smoothed.length;
   cy /= smoothed.length;
 
-  const triangles = fanTriangulateFromCentroid(smoothed) ?? earClipTriangulate(smoothed);
+  const triangles = earClipTriangulate(smoothed);
   return { vertices: smoothed, triangles, centroid: [cx, cy] };
 }

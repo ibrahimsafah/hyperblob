@@ -3,7 +3,7 @@
 
 struct CenterParams {
   center_strength: f32,
-  alpha: f32,
+  energy: f32,
   node_count: u32,
   _pad: u32,
 };
@@ -42,7 +42,7 @@ fn apply(@builtin(global_invocation_id) gid: vec3<u32>) {
   let mean_x = f32(atomicLoad(&center_sum[0])) / (FP_SCALE * n);
   let mean_y = f32(atomicLoad(&center_sum[1])) / (FP_SCALE * n);
 
-  let strength = params.center_strength * params.alpha;
+  let strength = params.center_strength * params.energy;
 
   let base = idx * 4u;
   // Apply force toward origin (subtract mean * strength from velocity)

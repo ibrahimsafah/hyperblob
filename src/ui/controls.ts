@@ -8,9 +8,11 @@ export function createSlider(opts: {
   value: number;
   onChange: (value: number) => void;
   logarithmic?: boolean;
+  tooltip?: string;
 }): HTMLElement {
   const container = document.createElement('div');
   container.className = 'ctrl-slider';
+  if (opts.tooltip) container.title = opts.tooltip;
 
   const header = document.createElement('div');
   header.className = 'ctrl-slider-header';

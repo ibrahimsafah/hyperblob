@@ -1,6 +1,7 @@
-// Hull renderer — renders semi-transparent convex hull polygons for hyperedges
-// Uses fan-triangulated geometry computed by HullCompute
-// Recomputes hulls periodically (not every frame) for performance
+// Hull renderer — renders semi-transparent hull polygons for hyperedges
+// Convex mode: fan-triangulated geometry computed by HullCompute
+// Metaball mode: screen-space fragment shader via MetaballRenderer
+// Recomputes periodically (not every frame) for performance
 
 import type { GPUContext } from '../gpu/device';
 import type { BufferManager } from '../gpu/buffer-manager';
@@ -8,7 +9,7 @@ import type { Camera } from './camera';
 import type { HypergraphData, RenderParams } from '../data/types';
 import type { HullData } from './hull-compute';
 import { HullCompute } from './hull-compute';
-import { MetaballCompute } from './metaball-compute';
+import { MetaballRenderer } from './metaball-renderer';
 import { getPaletteColor } from '../utils/color';
 import hullShaderCode from '../shaders/hull-render.wgsl?raw';
 
@@ -27,7 +28,7 @@ export class HullRenderer {
   private cameraBuffer: GPUBuffer | null = null;
 
   private hullCompute = new HullCompute();
-  private metaballCompute: MetaballCompute | null = null;
+  private metaballRenderer: MetaballRenderer | null = null;
   private hypergraphData: HypergraphData | null = null;
 
   // Hull vertex buffers (pre-allocated, grown as needed)
@@ -43,14 +44,13 @@ export class HullRenderer {
   // Dimmed edges (render at reduced alpha)
   private dimmedEdgeSet: Set<number> | null = null;
 
-  // Cached hull polygons for hit testing
+  // Cached hull polygons for hit testing (convex mode only)
   private lastHulls: HullData[] = [];
 
   // Recompute throttling
   private frameCounter = 0;
   private readonly recomputeInterval = 10;
   private needsRecompute = true;
-  private isRecomputing = false;
   private lastCameraVersion = -1;
 
   constructor(gpu: GPUContext, buffers: BufferManager, camera: Camera) {
@@ -161,6 +161,8 @@ export class HullRenderer {
     this.visibleEdges = null;
     this.needsRecompute = true;
     this.frameCounter = 0;
+    // Invalidate metaball renderer bind group (buffers may have changed)
+    this.metaballRenderer?.invalidateBindGroup();
   }
 
   setVisibleEdges(visibleEdges: Set<number> | null): void {
@@ -174,54 +176,51 @@ export class HullRenderer {
     this.forceRecompute();
   }
 
-  private async recomputeHulls(renderParams: RenderParams): Promise<void> {
-    if (this.isRecomputing) return; // prevent concurrent recomputes (race condition)
-    if (!this.hypergraphData || !this.buffers.hasBuffer('node-positions')) return;
+  /** Synchronous convex-hull recompute using CPU-side positions (no GPU readback). */
+  private recomputeHullsSync(positions: Float32Array, renderParams: RenderParams): void {
+    if (!this.hypergraphData) return;
 
-    this.isRecomputing = true;
-    try {
-      const nodeCount = this.hypergraphData.nodes.length;
-      const positionData = await this.buffers.readBuffer('node-positions', nodeCount * 16);
+    const edges = this.visibleEdges !== null
+      ? this.hypergraphData.hyperedges.filter(he => this.visibleEdges!.has(he.index))
+      : this.hypergraphData.hyperedges;
 
-      // Filter hyperedges if a selection is active
-      const edges = this.visibleEdges !== null
-        ? this.hypergraphData.hyperedges.filter(he => this.visibleEdges!.has(he.index))
-        : this.hypergraphData.hyperedges;
+    const hulls = this.hullCompute.computeHulls(
+      positions,
+      edges,
+      renderParams.hullMargin,
+      renderParams.hullSmoothing,
+    );
 
-      let hulls: HullData[];
-
-      if (renderParams.hullMode === 'metaball') {
-        // Lazy-init GPU metaball compute
-        this.metaballCompute ??= new MetaballCompute(this.gpu, this.buffers);
-        hulls = await this.metaballCompute.computeMetaballHulls(
-          positionData,
-          edges,
-          renderParams.hullMargin,
-          renderParams.hullMetaballThreshold,
-          renderParams.hullSmoothing,
-        );
-      } else {
-        hulls = this.hullCompute.computeHulls(
-          positionData,
-          edges,
-          renderParams.hullMargin,
-          renderParams.hullSmoothing,
-        );
-      }
-
-      this.lastHulls = hulls;
-
-      this.buildFillVertices(hulls, renderParams.hullAlpha);
-      if (renderParams.hullOutline) {
-        this.buildOutlineVertices(hulls);
-      } else {
-        this.outlineVertexCount = 0;
-      }
-
-      this.needsRecompute = false;
-    } finally {
-      this.isRecomputing = false;
+    this.lastHulls = hulls;
+    this.buildFillVertices(hulls, renderParams.hullAlpha);
+    if (renderParams.hullOutline) {
+      this.buildOutlineVertices(hulls);
+    } else {
+      this.outlineVertexCount = 0;
     }
+    this.needsRecompute = false;
+  }
+
+  /** Synchronous metaball instance update — fragment shader evaluates field per-pixel. */
+  private recomputeMetaballs(positions: Float32Array, renderParams: RenderParams): void {
+    if (!this.hypergraphData) return;
+
+    this.metaballRenderer ??= new MetaballRenderer(this.gpu, this.buffers, this.camera);
+
+    const edges = this.visibleEdges !== null
+      ? this.hypergraphData.hyperedges.filter(he => this.visibleEdges!.has(he.index))
+      : this.hypergraphData.hyperedges;
+
+    const sigma = Math.max(renderParams.hullMargin, 5);
+    this.metaballRenderer.updateInstances(
+      positions,
+      edges,
+      sigma,
+      renderParams.hullMetaballThreshold,
+      renderParams.hullAlpha,
+      this.dimmedEdgeSet,
+    );
+    this.needsRecompute = false;
   }
 
   private buildFillVertices(hulls: HullData[], alpha: number): void {
@@ -334,6 +333,12 @@ export class HullRenderer {
   /** Point-in-polygon hit test against cached hulls (ray-casting algorithm).
    *  Tests in reverse order so the topmost (last-rendered) hull wins. */
   hitTest(worldX: number, worldY: number): number | null {
+    // Metaball mode: delegate to field evaluation
+    if (this.metaballRenderer) {
+      return this.metaballRenderer.hitTest(worldX, worldY);
+    }
+
+    // Convex mode: point-in-polygon
     for (let h = this.lastHulls.length - 1; h >= 0; h--) {
       const verts = this.lastHulls[h].vertices;
       const n = verts.length;
@@ -353,40 +358,51 @@ export class HullRenderer {
     return null;
   }
 
-  render(renderPass: GPURenderPassEncoder, renderParams: RenderParams): void {
-    if (!this.pipeline || !this.bindGroup || !this.cameraBuffer) return;
+  render(renderPass: GPURenderPassEncoder, renderParams: RenderParams, positions: Float32Array | null): void {
     if (!this.hypergraphData) return;
 
-    // Update camera uniform (only when camera has changed)
-    if (this.camera.version !== this.lastCameraVersion) {
-      this.lastCameraVersion = this.camera.version;
-      this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
-    }
+    const isMetaball = renderParams.hullMode === 'metaball';
 
-    // Throttled hull recompute
+    // Throttled recompute
     this.frameCounter++;
-    if (this.needsRecompute || this.frameCounter >= this.recomputeInterval) {
+    if (positions && (this.needsRecompute || this.frameCounter >= this.recomputeInterval)) {
       this.frameCounter = 0;
-      // Fire and forget - hulls update asynchronously
-      this.recomputeHulls(renderParams).catch(() => {
-        // Ignore errors during recompute (e.g., buffer destroyed)
-      });
+
+      if (isMetaball) {
+        this.recomputeMetaballs(positions, renderParams);
+      } else {
+        this.recomputeHullsSync(positions, renderParams);
+      }
     }
 
-    // Draw filled hulls
-    if (this.fillVertexCount > 0 && this.fillVertexBuffer) {
-      renderPass.setPipeline(this.pipeline);
-      renderPass.setBindGroup(0, this.bindGroup);
-      renderPass.setVertexBuffer(0, this.fillVertexBuffer);
-      renderPass.draw(this.fillVertexCount);
-    }
+    if (isMetaball) {
+      // Metaball mode: delegate to fragment shader renderer
+      this.metaballRenderer?.render(renderPass);
+    } else {
+      // Convex mode: draw pre-computed hull geometry
+      if (!this.pipeline || !this.bindGroup || !this.cameraBuffer) return;
 
-    // Draw hull outlines
-    if (renderParams.hullOutline && this.outlineVertexCount > 0 && this.outlineVertexBuffer && this.outlinePipeline) {
-      renderPass.setPipeline(this.outlinePipeline);
-      renderPass.setBindGroup(0, this.bindGroup);
-      renderPass.setVertexBuffer(0, this.outlineVertexBuffer);
-      renderPass.draw(this.outlineVertexCount);
+      // Update camera uniform (only when camera has changed)
+      if (this.camera.version !== this.lastCameraVersion) {
+        this.lastCameraVersion = this.camera.version;
+        this.gpu.device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+      }
+
+      // Draw filled hulls
+      if (this.fillVertexCount > 0 && this.fillVertexBuffer) {
+        renderPass.setPipeline(this.pipeline);
+        renderPass.setBindGroup(0, this.bindGroup);
+        renderPass.setVertexBuffer(0, this.fillVertexBuffer);
+        renderPass.draw(this.fillVertexCount);
+      }
+
+      // Draw hull outlines
+      if (renderParams.hullOutline && this.outlineVertexCount > 0 && this.outlineVertexBuffer && this.outlinePipeline) {
+        renderPass.setPipeline(this.outlinePipeline);
+        renderPass.setBindGroup(0, this.bindGroup);
+        renderPass.setVertexBuffer(0, this.outlineVertexBuffer);
+        renderPass.draw(this.outlineVertexCount);
+      }
     }
   }
 }

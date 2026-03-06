@@ -77,7 +77,7 @@ export class App {
   private async loadDefaultDataset(): Promise<void> {
     try {
       const hifModule = await import(/* @vite-ignore */ './data/hif-loader');
-      const response = await fetch('/data/small-test.json');
+      const response = await fetch('/data/got.json');
       if (!response.ok) return;
       const json = await response.json();
       const data = hifModule.parseHIF(json);

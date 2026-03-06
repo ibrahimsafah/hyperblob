@@ -39,44 +39,44 @@ export function createSimulationTab(
   btnRow.appendChild(resetBtn);
   tab.appendChild(btnRow);
 
-  // -- Alpha progress --
-  const alphaContainer = document.createElement('div');
-  alphaContainer.className = 'ctrl-alpha-bar';
+  // -- Energy progress bar --
+  const energyContainer = document.createElement('div');
+  energyContainer.className = 'ctrl-alpha-bar';
 
-  const alphaLabel = document.createElement('span');
-  alphaLabel.className = 'ctrl-label';
-  alphaLabel.textContent = 'Alpha (energy)';
+  const energyLabel = document.createElement('span');
+  energyLabel.className = 'ctrl-label';
+  energyLabel.textContent = 'Energy';
 
-  const alphaTrack = document.createElement('div');
-  alphaTrack.className = 'ctrl-alpha-track';
+  const energyTrack = document.createElement('div');
+  energyTrack.className = 'ctrl-alpha-track';
 
-  const alphaFill = document.createElement('div');
-  alphaFill.className = 'ctrl-alpha-fill';
-  alphaFill.style.width = `${(simParams.alpha * 100).toFixed(0)}%`;
+  const energyFill = document.createElement('div');
+  energyFill.className = 'ctrl-alpha-fill';
+  energyFill.style.width = `${(simParams.energy * 100).toFixed(0)}%`;
 
-  const alphaValue = document.createElement('span');
-  alphaValue.className = 'ctrl-value';
-  alphaValue.textContent = simParams.alpha.toFixed(3);
+  const energyValue = document.createElement('span');
+  energyValue.className = 'ctrl-value';
+  energyValue.textContent = simParams.energy.toFixed(3);
 
-  alphaTrack.appendChild(alphaFill);
+  energyTrack.appendChild(energyFill);
 
-  const alphaHeader = document.createElement('div');
-  alphaHeader.className = 'ctrl-slider-header';
-  alphaHeader.appendChild(alphaLabel);
-  alphaHeader.appendChild(alphaValue);
+  const energyHeader = document.createElement('div');
+  energyHeader.className = 'ctrl-slider-header';
+  energyHeader.appendChild(energyLabel);
+  energyHeader.appendChild(energyValue);
 
-  alphaContainer.appendChild(alphaHeader);
-  alphaContainer.appendChild(alphaTrack);
-  tab.appendChild(alphaContainer);
+  energyContainer.appendChild(energyHeader);
+  energyContainer.appendChild(energyTrack);
+  tab.appendChild(energyContainer);
 
-  // Update alpha display periodically
-  const alphaUpdateInterval = setInterval(() => {
-    alphaFill.style.width = `${Math.min(100, simParams.alpha * 100).toFixed(0)}%`;
-    alphaValue.textContent = simParams.alpha.toFixed(3);
+  // Update energy display periodically
+  const energyUpdateInterval = setInterval(() => {
+    energyFill.style.width = `${Math.min(100, simParams.energy * 100).toFixed(0)}%`;
+    energyValue.textContent = simParams.energy.toFixed(3);
   }, 100);
 
   const dispose = () => {
-    clearInterval(alphaUpdateInterval);
+    clearInterval(energyUpdateInterval);
   };
 
   // -- Force parameters section --
@@ -89,6 +89,7 @@ export function createSimulationTab(
     step: 10,
     value: simParams.repulsionStrength,
     onChange: (v) => { simParams.repulsionStrength = v; },
+    tooltip: 'Negative charge between nodes — pushes them apart. Stronger = more spread out.',
   }));
 
   tab.appendChild(createSlider({
@@ -98,6 +99,7 @@ export function createSimulationTab(
     step: 0.005,
     value: simParams.attractionStrength,
     onChange: (v) => { simParams.attractionStrength = v; },
+    tooltip: 'Spring force pulling hyperedge members toward their shared center.',
   }));
 
   tab.appendChild(createSlider({
@@ -107,6 +109,7 @@ export function createSimulationTab(
     step: 5,
     value: simParams.linkDistance,
     onChange: (v) => { simParams.linkDistance = v; },
+    tooltip: 'Ideal distance between connected nodes. Springs rest at this length.',
   }));
 
   tab.appendChild(createSlider({
@@ -116,6 +119,7 @@ export function createSimulationTab(
     step: 0.002,
     value: simParams.centerStrength,
     onChange: (v) => { simParams.centerStrength = v; },
+    tooltip: 'Gentle pull toward the center of the viewport. Prevents drift.',
   }));
 
   tab.appendChild(createSlider({
@@ -125,6 +129,7 @@ export function createSimulationTab(
     step: 0.05,
     value: simParams.velocityDecay,
     onChange: (v) => { simParams.velocityDecay = v; },
+    tooltip: 'Friction — 0 = frozen, 1 = no damping. Controls how quickly nodes slow down.',
   }));
 
   tab.appendChild(createSlider({
@@ -134,31 +139,34 @@ export function createSimulationTab(
     step: 0.1,
     value: simParams.theta,
     onChange: (v) => { simParams.theta = v; },
+    tooltip: 'Barnes-Hut accuracy. Lower = more accurate forces but slower. 0.9 is a good balance.',
   }));
 
   tab.appendChild(createSlider({
-    label: 'Alpha Decay',
+    label: 'Cooling Rate',
     min: 0,
     max: 0.1,
     step: 0.001,
-    value: simParams.alphaDecay,
-    onChange: (v) => { simParams.alphaDecay = v; },
+    value: simParams.coolingRate,
+    onChange: (v) => { simParams.coolingRate = v; },
+    tooltip: 'How fast the simulation cools down. Higher = settles faster but may miss optimal layout.',
   }));
 
   tab.appendChild(createSlider({
-    label: 'Alpha Target',
+    label: 'Idle Energy',
     min: 0,
     max: 0.1,
     step: 0.005,
-    value: simParams.alphaTarget,
+    value: simParams.idleEnergy,
     onChange: (v) => {
-      simParams.alphaTarget = v;
-      // If alpha already settled below new target, bump it up
-      if (simParams.alpha < v) {
-        simParams.alpha = v;
+      simParams.idleEnergy = v;
+      // If energy already settled below new target, bump it up
+      if (simParams.energy < v) {
+        simParams.energy = v;
         simParams.running = true;
       }
     },
+    tooltip: 'Minimum energy the simulation settles to. Higher = nodes keep jiggling slightly.',
   }));
 
   return { el: tab, dispose };

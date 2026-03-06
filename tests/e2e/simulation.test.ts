@@ -18,7 +18,7 @@ test.describe('Force Simulation', () => {
     expect(isRunning).toBe(true);
   });
 
-  test('simulation alpha starts near 1.0', async ({ page }) => {
+  test('simulation energy starts near 1.0', async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(
       () => {
@@ -28,14 +28,14 @@ test.describe('Force Simulation', () => {
       { timeout: 15000 }
     );
 
-    const alpha = await page.evaluate(() => {
+    const energy = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().alpha;
+      return app.getSimParams().energy;
     });
 
-    // Alpha should be near 1.0 right after loading (might have decayed slightly)
-    expect(alpha).toBeGreaterThan(0.5);
-    expect(alpha).toBeLessThanOrEqual(1.0);
+    // Energy should be near 1.0 right after loading (might have decayed slightly)
+    expect(energy).toBeGreaterThan(0.5);
+    expect(energy).toBeLessThanOrEqual(1.0);
   });
 
   test('positions change over time (layout is running)', async ({ page }) => {
@@ -48,11 +48,11 @@ test.describe('Force Simulation', () => {
       { timeout: 15000 }
     );
 
-    // Snapshot camera center at t=0
+    // Snapshot at t=0
     const snapshot1 = await page.evaluate(() => {
       const app = (window as any).__app;
       return {
-        alpha: app.getSimParams().alpha,
+        energy: app.getSimParams().energy,
         camera: [...app.getCamera().center],
       };
     });
@@ -64,16 +64,16 @@ test.describe('Force Simulation', () => {
     const snapshot2 = await page.evaluate(() => {
       const app = (window as any).__app;
       return {
-        alpha: app.getSimParams().alpha,
+        energy: app.getSimParams().energy,
         camera: [...app.getCamera().center],
       };
     });
 
-    // Alpha should have decayed
-    expect(snapshot2.alpha).toBeLessThan(snapshot1.alpha);
+    // Energy should have decayed
+    expect(snapshot2.energy).toBeLessThan(snapshot1.energy);
   });
 
-  test('simulation alpha decays over time', async ({ page }) => {
+  test('simulation energy decays over time', async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(
       () => {
@@ -83,22 +83,22 @@ test.describe('Force Simulation', () => {
       { timeout: 15000 }
     );
 
-    const alpha1 = await page.evaluate(() => {
+    const energy1 = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().alpha;
+      return app.getSimParams().energy;
     });
 
     await page.waitForTimeout(3000);
 
-    const alpha2 = await page.evaluate(() => {
+    const energy2 = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().alpha;
+      return app.getSimParams().energy;
     });
 
-    expect(alpha2).toBeLessThan(alpha1);
+    expect(energy2).toBeLessThan(energy1);
   });
 
-  test('simulation eventually converges (alpha approaches alphaMin)', async ({ page }) => {
+  test('simulation eventually converges (energy approaches stopThreshold)', async ({ page }) => {
     await page.goto('/');
     await page.waitForFunction(
       () => {
@@ -113,16 +113,16 @@ test.describe('Force Simulation', () => {
       () => {
         const app = (window as any).__app;
         const params = app.getSimParams();
-        return params.alpha <= params.alphaMin;
+        return params.energy <= params.stopThreshold;
       },
       { timeout: 30000 }
     );
 
-    const alpha = await page.evaluate(() => {
+    const energy = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().alpha;
+      return app.getSimParams().energy;
     });
 
-    expect(alpha).toBeLessThanOrEqual(0.001);
+    expect(energy).toBeLessThanOrEqual(0.001);
   });
 });

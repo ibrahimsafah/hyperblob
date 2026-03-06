@@ -150,8 +150,8 @@ export class HyperblobEngine {
           this.dragTargetPos = [x, y];
           this.dragPrevPos = [x, y];
         }
-        if (this.simParams.alpha < 0.08) {
-          this.simParams.alpha = 0.08;
+        if (this.simParams.energy < 0.08) {
+          this.simParams.energy = 0.08;
         }
         this.simParams.running = true;
       },
@@ -360,7 +360,7 @@ export class HyperblobEngine {
     // Setup force simulation
     this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams);
 
-    this.simParams.alpha = 1.0;
+    this.simParams.energy = 1.0;
     this.simParams.running = true;
 
     this.camera.fitBounds(-spread / 2, -spread / 2, spread / 2, spread / 2);
@@ -568,7 +568,7 @@ export class HyperblobEngine {
 
   resetSimulation(): void {
     if (!this.graphData) return;
-    this.simParams.alpha = 1.0;
+    this.simParams.energy = 1.0;
     this.simParams.running = true;
     const spread = Math.sqrt(this.graphData.nodes.length) * 10;
     const positions = new Float32Array(this.graphData.nodes.length * 4);
@@ -598,8 +598,8 @@ export class HyperblobEngine {
   private tick = (): void => {
     if (this.disposed || !this.running) return;
 
-    if (this.draggedNodeIndex !== null && this.simParams.alpha < 0.08) {
-      this.simParams.alpha = 0.08;
+    if (this.draggedNodeIndex !== null && this.simParams.energy < 0.08) {
+      this.simParams.energy = 0.08;
       this.simParams.running = true;
     }
 
@@ -611,9 +611,9 @@ export class HyperblobEngine {
       this.buffers.uploadData('node-positions', this.dragUploadArray, this.draggedNodeIndex * 16);
     }
 
-    if (this.simulation && this.simParams.running && this.simParams.alpha > this.simParams.alphaMin) {
+    if (this.simulation && this.simParams.running && this.simParams.energy > this.simParams.stopThreshold) {
       this.simulation.tick(this.simParams);
-      this.simParams.alpha += (this.simParams.alphaTarget - this.simParams.alpha) * this.simParams.alphaDecay;
+      this.simParams.energy += (this.simParams.idleEnergy - this.simParams.energy) * this.simParams.coolingRate;
     }
 
     if (this.draggedNodeIndex !== null && this.dragTargetPos && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
@@ -636,7 +636,7 @@ export class HyperblobEngine {
       });
     }
 
-    if (this.hullRendererInstance && (this.draggedNodeIndex !== null || this.simParams.alpha > 0.05)) {
+    if (this.hullRendererInstance && (this.draggedNodeIndex !== null || this.simParams.energy > 0.05)) {
       this.hullRendererInstance.forceRecompute();
     }
 
@@ -687,7 +687,7 @@ export class HyperblobEngine {
     });
 
     if (this.hullRendererInstance && this.renderParams.hullAlpha > 0) {
-      this.hullRendererInstance.render(renderPass, this.renderParams);
+      this.hullRendererInstance.render(renderPass, this.renderParams, this.cpuPositions);
     }
 
     if (this.edgeRendererInstance && this.renderParams.edgeOpacity > 0) {

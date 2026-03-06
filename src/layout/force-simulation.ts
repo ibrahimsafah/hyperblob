@@ -271,10 +271,10 @@ export class ForceSimulation {
       f32[2] = params.linkDistance;
       f32[3] = params.centerStrength;
       f32[4] = params.velocityDecay;
-      f32[5] = params.alpha;
-      f32[6] = params.alphaTarget;
-      f32[7] = params.alphaDecay;
-      f32[8] = params.alphaMin;
+      f32[5] = params.energy;
+      f32[6] = params.idleEnergy;
+      f32[7] = params.coolingRate;
+      f32[8] = params.stopThreshold;
       f32[9] = params.theta;
       u32[10] = this.nodeCount;
       u32[11] = this.quadtree.treeSize;
@@ -309,7 +309,7 @@ export class ForceSimulation {
       const u32 = new Uint32Array(paramsData);
       f32[0] = params.attractionStrength;
       f32[1] = params.linkDistance;
-      f32[2] = params.alpha;
+      f32[2] = params.energy;
       u32[3] = 0; // total_pairs (unused, kept for alignment)
       u32[4] = this.edgeCount;
       u32[5] = 0;
@@ -347,7 +347,7 @@ export class ForceSimulation {
       const f32 = new Float32Array(paramsData);
       const u32 = new Uint32Array(paramsData);
       f32[0] = params.centerStrength;
-      f32[1] = params.alpha;
+      f32[1] = params.energy;
       u32[2] = this.nodeCount;
       u32[3] = 0;
 
@@ -383,7 +383,7 @@ export class ForceSimulation {
       const f32 = new Float32Array(paramsData);
       const u32 = new Uint32Array(paramsData);
       f32[0] = params.velocityDecay;
-      f32[1] = params.alpha;
+      f32[1] = params.energy;
       u32[2] = this.nodeCount;
       u32[3] = 0;
 

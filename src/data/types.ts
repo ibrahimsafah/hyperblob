@@ -54,10 +54,10 @@ export interface SimulationParams {
   linkDistance: number;
   centerStrength: number;
   velocityDecay: number;
-  alpha: number;
-  alphaTarget: number;
-  alphaDecay: number;
-  alphaMin: number;
+  energy: number;
+  idleEnergy: number;
+  coolingRate: number;
+  stopThreshold: number;
   theta: number; // Barnes-Hut opening angle
   running: boolean;
 }
@@ -67,12 +67,12 @@ export function defaultSimulationParams(): SimulationParams {
     repulsionStrength: -300,
     attractionStrength: 0.03,
     linkDistance: 50,
-    centerStrength: 0.01,
+    centerStrength: 0.015,
     velocityDecay: 0.6,
-    alpha: 1.0,
-    alphaTarget: 0.02,
-    alphaDecay: 0.0228, // ~300 iterations to alphaMin
-    alphaMin: 0.001,
+    energy: 1.0,
+    idleEnergy: 0.02,
+    coolingRate: 0.0228, // ~300 iterations to stopThreshold
+    stopThreshold: 0.001,
     theta: 0.9,
     running: true,
   };
@@ -98,12 +98,12 @@ export interface RenderParams {
 export function defaultRenderParams(): RenderParams {
   return {
     nodeBaseSize: 10,
-    edgeOpacity: 0.0,
+    edgeOpacity: 0.15,
     hullAlpha: 0.25,
     hullOutline: false,
     hullMargin: 3,
     hullSmoothing: 4,
-    hullMode: 'convex',
+    hullMode: 'metaball',
     hullMetaballThreshold: 0.5,
     nodeDarkMode: true,
     backgroundColor: [0.97, 0.97, 0.98, 1.0],

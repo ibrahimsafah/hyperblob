@@ -15,6 +15,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 0.5,
     value: renderParams.nodeBaseSize,
     onChange: (v) => { renderParams.nodeBaseSize = v; },
+    tooltip: 'Radius of each node circle in pixels.',
   }));
 
   tab.appendChild(createToggle({
@@ -33,6 +34,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 0.05,
     value: renderParams.edgeOpacity,
     onChange: (v) => { renderParams.edgeOpacity = v; },
+    tooltip: 'Opacity of hyperedge lines connecting member nodes to their shared center.',
   }));
 
   // -- Hulls section --
@@ -55,6 +57,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 0.05,
     value: renderParams.hullMetaballThreshold,
     onChange: (v) => { renderParams.hullMetaballThreshold = v; },
+    tooltip: 'Field value cutoff for metaball blobs. Lower = larger blobs, higher = tighter around nodes.',
   }));
 
   tab.appendChild(createSlider({
@@ -64,6 +67,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 0.01,
     value: renderParams.hullAlpha,
     onChange: (v) => { renderParams.hullAlpha = v; },
+    tooltip: 'Transparency of hull/blob fills. 0 = invisible, 0.8 = nearly opaque.',
   }));
 
   tab.appendChild(createSlider({
@@ -73,6 +77,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 1,
     value: renderParams.hullMargin,
     onChange: (v) => { renderParams.hullMargin = v; },
+    tooltip: 'Padding around nodes for hull computation. In metaball mode, controls the Gaussian sigma.',
   }));
 
   tab.appendChild(createSlider({
@@ -82,6 +87,7 @@ export function createRenderingTab(renderParams: RenderParams): HTMLElement {
     step: 1,
     value: renderParams.hullSmoothing,
     onChange: (v) => { renderParams.hullSmoothing = v; },
+    tooltip: 'Chaikin smoothing iterations for convex hull outlines. Only affects convex mode.',
   }));
 
   tab.appendChild(createToggle({

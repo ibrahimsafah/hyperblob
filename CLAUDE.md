@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-WebGPU hypergraph visualizer with GPU Barnes-Hut force-directed layout. Hyperedges rendered as convex hull polygons or GPU-accelerated metaball blobs (Euler-diagram style). Zero runtime deps, Vite + TypeScript.
+WebGPU hypergraph visualizer with GPU Barnes-Hut force-directed layout. Hyperedges rendered as convex hull polygons or screen-space fragment shader metaball blobs (Euler-diagram style). Zero runtime deps, Vite + TypeScript.
 
 ## Commands
 
 ```bash
 npm run dev          # Dev server at localhost:5173
 npm run build        # tsc + vite build
-npm run test:unit    # Vitest (152 tests)
+npm run test:unit    # Vitest (178 tests)
 npm run test:e2e     # Playwright + Brave
 ```
 
@@ -17,10 +17,19 @@ npm run test:e2e     # Playwright + Brave
 
 - `src/app.ts` — Main orchestrator. Uses dynamic imports (`import(/* @vite-ignore */ path)`) for subsystems so partial builds don't crash.
 - `src/layout/force-simulation.ts` — Dispatches 8 GPU compute passes per tick (morton → radix sort → quadtree → repulsion → attraction → center → integrate).
-- `src/render/hull-compute.ts` — CPU-side Andrew's monotone chain (convex mode). Runs every 10 frames via async GPU readback.
+- `src/render/hull-compute.ts` — CPU-side Andrew's monotone chain (convex mode). Runs every 10 frames.
 - `src/render/hull-renderer.ts` — Must call `.setData(data)` after construction or hulls won't render. Branches on `renderParams.hullMode` (convex vs metaball).
-- `src/render/metaball-compute.ts` — GPU metaball pipeline: dispatches `metaball-field.wgsl` for scalar field, then CPU marching squares + Chaikin smoothing.
-- `src/render/metaball-hull.ts` — CPU algorithms: marching squares, contour stitching, ear-clip triangulation, Chaikin smoothing. Also used as CPU-only fallback.
+- `src/render/metaball-renderer.ts` — Screen-space fragment shader metaballs. Instanced bounding-box quads with per-pixel Gaussian field evaluation + MST bridge capsule SDFs.
+- `src/render/metaball-hull.ts` — CPU algorithms: marching squares, contour stitching, ear-clip triangulation, Chaikin smoothing. Used for hit testing and CPU-only fallback.
+- `src/render/metaball-compute.ts` — **DEAD CODE** (legacy GPU compute → CPU readback pipeline, replaced by metaball-renderer.ts).
+
+## Simulation Parameters
+
+Parameters use physics-inspired names (not D3-style alpha):
+- `energy` — simulation temperature, starts at 1.0, decays over time
+- `coolingRate` — how fast energy dissipates per tick (0.0228 ≈ 300 iterations)
+- `idleEnergy` — steady-state minimum energy (0.02, keeps things slightly alive)
+- `stopThreshold` — below this energy, simulation stops entirely (0.001)
 
 ## WGSL Gotchas (learned the hard way)
 
@@ -34,9 +43,9 @@ npm run test:e2e     # Playwright + Brave
 - `node-metadata`: `[group, flags]` per node — 8 bytes (Uint32)
 - `he-offsets` + `he-members`: CSR format for hyperedge membership (Uint32)
 - `quadtree`: 8 floats per tree node (COM x/y, mass, cell_size, node_index, child_mask, min_x, min_y)
-- `metaball-edge-metas`: `[origin_x, origin_y, cell_size, pad]` per edge — 16 bytes (Float32)
-- `metaball-grid-out`: 64×64 Float32 scalar field per edge (output from GPU)
-- `metaball-params`: uniform `[sigma, grid_size, edge_count, pad]` — 16 bytes
+- `metaball-instances`: `[bbox_min, bbox_max, color, edge_index, mst_offset, mst_count, pad]` per edge — 48 bytes
+- `metaball-mst`: flat `[node_a, node_b]` u32 pairs for MST bridge field
+- `metaball-render-params`: uniform `[sigma, threshold, smoothing_band, pad]` — 16 bytes
 
 ## Key Conventions
 
@@ -54,3 +63,4 @@ npm run test:e2e     # Playwright + Brave
 
 - Production build only bundles 13 modules (dynamic imports with @vite-ignore bypass Vite bundling)
 - E2E tests need Brave browser at `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`
+- Legacy `metaball-compute.ts` and `metaball-field.wgsl` can be deleted (dead code)

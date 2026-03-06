@@ -11,7 +11,7 @@
 struct AttractionParams {
   attraction_strength: f32,
   link_distance: f32,
-  alpha: f32,
+  energy: f32,
   total_pairs: u32,   // total number of member entries across all edges
   edge_count: u32,
   _pad0: u32,
@@ -56,7 +56,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   cy *= inv_count;
 
   // Apply spring force from each member toward centroid
-  let strength = params.attraction_strength * params.alpha;
+  let strength = params.attraction_strength * params.energy;
 
   for (var i = start; i < end; i++) {
     let ni = he_members[i];

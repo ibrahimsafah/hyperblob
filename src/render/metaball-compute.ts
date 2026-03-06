@@ -14,7 +14,6 @@ import {
   chaikinSmooth,
   addBridgeField as addBridgeFieldJS,
   earClipTriangulate,
-  fanTriangulateFromCentroid,
 } from './metaball-hull';
 import {
   addBridgeFieldWasm,
@@ -26,17 +25,6 @@ import shaderCode from '../shaders/metaball-field.wgsl?raw';
 
 const GRID_SIZE = 64;
 const CELLS_PER_EDGE = GRID_SIZE * GRID_SIZE; // 4096
-
-/** Snapshot of state needed to process a readback on the CPU */
-interface PendingReadback {
-  promise: Promise<Float32Array>;
-  gpuEdges: { he: HyperedgeData; points: Vec2[] }[];
-  edgeMetas: Float32Array;
-  edgeCount: number;
-  threshold: number;
-  smoothIters: number;
-  sigma: number;
-}
 
 export class MetaballCompute {
   private gpu: GPUContext;
@@ -52,9 +40,6 @@ export class MetaballCompute {
   private paramsF32 = new Float32Array(this.paramsBackingBuffer, 0, 1);
   private paramsU32 = new Uint32Array(this.paramsBackingBuffer, 4, 3);
   private paramsView = new Uint8Array(this.paramsBackingBuffer);
-
-  // Double-buffer: pending readback from previous dispatch
-  private pending: PendingReadback | null = null;
 
   constructor(gpu: GPUContext, buffers: BufferManager) {
     this.gpu = gpu;
@@ -97,10 +82,11 @@ export class MetaballCompute {
   }
 
   /**
-   * Double-buffered metaball computation:
-   * 1. If there's a pending readback from last call, process it (CPU marching squares)
-   * 2. Dispatch new GPU work and start async readback (non-blocking)
-   * 3. Return the results from step 1 (or empty on first call)
+   * Single-pass metaball computation:
+   * 1. Dispatch GPU scalar field computation
+   * 2. Await readback
+   * 3. CPU marching squares + triangulation
+   * Returns results directly — no double-buffer lag.
    */
   async computeMetaballHulls(
     positions: Float32Array,
@@ -109,25 +95,6 @@ export class MetaballCompute {
     threshold: number,
     smoothIters: number,
   ): Promise<HullData[]> {
-    // ── Phase 1: Process previous frame's readback (if any) ──
-    const previousResults = this.pending
-      ? await this.processPendingReadback(this.pending)
-      : [];
-
-    // ── Phase 2: Dispatch new GPU work ──
-    this.pending = this.dispatchNewFrame(positions, hyperedges, margin, threshold, smoothIters);
-
-    return previousResults;
-  }
-
-  /** Dispatch GPU field computation and start non-blocking readback */
-  private dispatchNewFrame(
-    positions: Float32Array,
-    hyperedges: HyperedgeData[],
-    margin: number,
-    threshold: number,
-    smoothIters: number,
-  ): PendingReadback | null {
     // Filter to edges with 2+ members (singletons don't need hulls)
     const gpuEdges: { he: HyperedgeData; points: Vec2[] }[] = [];
     const sigma = Math.max(margin, 5);
@@ -142,7 +109,7 @@ export class MetaballCompute {
       gpuEdges.push({ he, points });
     }
 
-    if (gpuEdges.length === 0) return null;
+    if (gpuEdges.length === 0) return [];
 
     // ── CPU: compute bounding boxes & edge metadata ──
     const edgeCount = gpuEdges.length;
@@ -222,19 +189,12 @@ export class MetaballCompute {
     pass.end();
     this.gpu.device.queue.submit([encoder.finish()]);
 
-    // Start async readback (non-blocking — returns promise, doesn't await)
+    // ── Await readback ──
     const gridSize = edgeCount * CELLS_PER_EDGE * 4;
-    const promise = this.buffers.readBuffer('metaball-grid-out', gridSize);
+    const gridData = await this.buffers.readBuffer('metaball-grid-out', gridSize);
 
-    return { promise, gpuEdges, edgeMetas, edgeCount, threshold, smoothIters, sigma };
-  }
-
-  /** Process a completed readback: marching squares + triangulation on CPU */
-  private async processPendingReadback(pending: PendingReadback): Promise<HullData[]> {
-    const { gpuEdges, edgeMetas, edgeCount, threshold, smoothIters, sigma } = pending;
+    // ── CPU: marching squares + triangulation ──
     const results: HullData[] = [];
-
-    const gridData = await pending.promise;
 
     for (let i = 0; i < edgeCount; i++) {
       const { he } = gpuEdges[i];
@@ -257,7 +217,6 @@ export class MetaballCompute {
       };
 
       // Overlay MST bridge field to keep blobs connected when nodes are far apart
-      // Use WASM-accelerated version if available, JS fallback otherwise
       if (isWasmReady()) {
         addBridgeFieldWasm(grid, gpuEdges[i].points, sigma);
       } else {
@@ -299,9 +258,11 @@ export class MetaballCompute {
       cx /= smoothed.length;
       cy /= smoothed.length;
 
-      // Fast path: fan-triangulation O(n) for star-convex contours
-      // Fallback: ear-clip O(n²) for concave bridge tendrils
-      const triangles = fanTriangulateFromCentroid(smoothed) ?? earClipTriangulate(smoothed);
+      // Metaball contours are inherently concave (bridge tendrils between distant
+      // nodes). Chaikin smoothing on narrow bridges can create self-intersections,
+      // which breaks fan-triangulation's star-convexity check. Ear-clip handles
+      // these robustly, and the O(n²) cost is amortized by 10-frame throttling.
+      const triangles = earClipTriangulate(smoothed);
       results.push({
         vertices: smoothed,
         centroid: [cx, cy],
@@ -314,7 +275,6 @@ export class MetaballCompute {
   }
 
   destroy(): void {
-    this.pending = null;
     this.buffers.destroyBuffer('metaball-edge-metas');
     this.buffers.destroyBuffer('metaball-grid-out');
     this.buffers.destroyBuffer('metaball-params');

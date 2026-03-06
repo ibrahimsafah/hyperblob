@@ -75,7 +75,7 @@ export class Renderer {
 
     // 1. Draw hulls (back layer)
     if (renderParams.hullAlpha > 0) {
-      this.hullRenderer.render(renderPass, renderParams);
+      this.hullRenderer.render(renderPass, renderParams, null);
     }
 
     // 2. Draw edges

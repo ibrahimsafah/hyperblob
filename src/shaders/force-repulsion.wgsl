@@ -10,10 +10,10 @@ struct SimParams {
   link_distance: f32,
   center_strength: f32,
   velocity_decay: f32,
-  alpha: f32,
-  alpha_target: f32,
-  alpha_decay: f32,
-  alpha_min: f32,
+  energy: f32,
+  idle_energy: f32,
+  cooling_rate: f32,
+  stop_threshold: f32,
   theta: f32,
   node_count: u32,
   tree_size: u32,
@@ -37,7 +37,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var fx: f32 = 0.0;
   var fy: f32 = 0.0;
 
-  let strength = params.repulsion_strength * params.alpha;
+  let strength = params.repulsion_strength * params.energy;
   let theta_sq = params.theta * params.theta;
 
   // Stack-based tree traversal

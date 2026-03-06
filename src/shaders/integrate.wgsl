@@ -4,7 +4,7 @@
 
 struct IntegrateParams {
   velocity_decay: f32,
-  alpha: f32,
+  energy: f32,
   node_count: u32,
   _pad: u32,
 };
