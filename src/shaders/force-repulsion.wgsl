@@ -37,7 +37,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var fx: f32 = 0.0;
   var fy: f32 = 0.0;
 
-  let strength = params.repulsion_strength * params.energy;
+  let strength = -params.repulsion_strength * params.energy;
   let theta_sq = params.theta * params.theta;
 
   // Stack-based tree traversal
