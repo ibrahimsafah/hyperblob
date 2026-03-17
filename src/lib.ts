@@ -20,6 +20,7 @@ import { ForceSimulation } from './layout/force-simulation';
 import { InputHandler } from './interaction/input-handler';
 import { EdgeRenderer } from './render/edge-renderer';
 import { HullRenderer } from './render/hull-renderer';
+import { BoundaryRenderer } from './render/boundary-renderer';
 
 // ── Public option types ──
 
@@ -81,6 +82,7 @@ export class HyperblobEngine {
   private inputHandlerInstance: InputHandler | null = null;
   private edgeRendererInstance: EdgeRenderer | null = null;
   private hullRendererInstance: HullRenderer | null = null;
+  private boundaryRendererInstance: BoundaryRenderer | null = null;
   private simulation: ForceSimulation | null = null;
   private tooltip: Tooltip | null = null;
   private lastHoveredNode: number | null = null;
@@ -361,6 +363,11 @@ export class HyperblobEngine {
     }
     this.hullRendererInstance.setData(data);
 
+    // Setup boundary renderer
+    if (!this.boundaryRendererInstance) {
+      this.boundaryRendererInstance = new BoundaryRenderer(this.gpu, this.camera);
+    }
+
     // Setup force simulation
     this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams, this.profiler, this.gpu.features);
 
@@ -611,9 +618,12 @@ export class HyperblobEngine {
       this.cpuPositions = await this.buffers.readBuffer('node-positions', this.nodeCount * 16);
     }
 
-    // Trigger hull recompute with fresh positions
+    // Trigger hull + boundary recompute with fresh positions
     if (this.hullRendererInstance) {
       this.hullRendererInstance.forceRecompute();
+    }
+    if (this.cpuPositions) {
+      this.boundaryRendererInstance?.updateFromPositions(this.cpuPositions, this.nodeCount, this.renderParams.nodeBaseSize);
     }
 
     // Fit camera to converged layout
@@ -690,6 +700,7 @@ export class HyperblobEngine {
       this.buffers.readBuffer('node-positions', this.nodeCount * 16).then(data => {
         this.cpuPositions = data;
         this.cpuPositionsPending = false;
+        this.boundaryRendererInstance?.updateFromPositions(data, this.nodeCount, this.renderParams.nodeBaseSize);
       });
     }
 
@@ -742,6 +753,11 @@ export class HyperblobEngine {
         storeOp: 'store',
       }],
     });
+
+    // Boundary circle (behind everything)
+    if (this.boundaryRendererInstance) {
+      this.boundaryRendererInstance.render(renderPass);
+    }
 
     if (this.hullRendererInstance && this.renderParams.hullAlpha > 0) {
       this.hullRendererInstance.render(renderPass, this.renderParams, this.cpuPositions);

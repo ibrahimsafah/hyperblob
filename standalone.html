@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hyperblob — Standalone</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #f5f5f7; color: #1a1a2e; font-family: system-ui, -apple-system, sans-serif; }
+    #app { display: flex; width: 100%; height: 100%; }
+    #canvas-container { flex: 1; position: relative; }
+    canvas { width: 100%; height: 100%; display: block; }
+    #panel { width: 340px; height: 100%; background: #ffffff; border-left: 1px solid #e0e0e5; flex-shrink: 0; display: flex; flex-direction: column; }
+    #error-overlay { display: none; position: fixed; inset: 0; background: rgba(245,245,247,0.95); z-index: 1000; justify-content: center; align-items: center; }
+    #error-overlay.visible { display: flex; }
+    #error-box { background: #fff; border: 1px solid #ff4466; border-radius: 12px; padding: 32px; max-width: 500px; text-align: center; }
+    #error-box h2 { color: #ff4466; margin-bottom: 12px; }
+    #error-box p { color: #555; line-height: 1.6; }
+    #error-box a { color: #6688ff; }
+
+    /* ── Standalone panel styles ── */
+    .sa-title { padding: 14px 16px 10px; font-size: 13px; font-weight: 600; color: #2a2a3e; letter-spacing: 0.5px; border-bottom: 1px solid #e0e0e5; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+    .sa-scroll { flex: 1; overflow-y: auto; padding: 0 14px 20px; }
+    .sa-section-header { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888898; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e0e0e5; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+    .sa-drop-zone { border: 1px dashed #d0d0d8; border-radius: 8px; padding: 20px; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; margin-bottom: 10px; }
+    .sa-drop-zone:hover, .sa-drop-zone.dragover { border-color: #5577cc; background: rgba(85,119,204,0.05); }
+    .sa-drop-label { color: #555570; font-size: 12px; margin-bottom: 4px; }
+    .sa-drop-hint { color: #888898; font-size: 10px; }
+    .sa-file-input { display: none; }
+
+    .sa-paste { width: 100%; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; padding: 8px 10px; border: 1px solid #d0d0d8; border-radius: 6px; resize: vertical; margin-bottom: 8px; color: #333; background: #fafafa; }
+    .sa-paste:focus { outline: none; border-color: #5577cc; }
+
+    .sa-btn { display: block; width: 100%; padding: 8px 14px; border: 1px solid #d0d0d8; border-radius: 6px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; font-weight: 500; cursor: pointer; transition: background 0.15s, border-color 0.15s; margin-bottom: 10px; }
+    .sa-btn-default { background: #f0f0f5; color: #555570; }
+    .sa-btn-default:hover { background: #e8e8f0; border-color: #b0b0c0; }
+    .sa-btn-primary { background: #5577cc; border-color: #4466bb; color: #fff; }
+    .sa-btn-primary:hover { background: #4466bb; }
+    .sa-btn-danger { background: #fff0f0; border-color: #ffaaaa; color: #cc3333; }
+    .sa-btn-danger:hover { background: #ffe0e0; }
+
+    .sa-btn-row { display: flex; gap: 6px; margin-bottom: 10px; }
+    .sa-btn-row .sa-btn { flex: 1; margin-bottom: 0; }
+
+    .sa-field { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .sa-label { color: #555570; font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .sa-select { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; padding: 4px 8px; border: 1px solid #d0d0d8; border-radius: 4px; background: #f8f8fa; color: #333; cursor: pointer; max-width: 160px; }
+
+    .sa-hint { font-size: 10px; color: #888898; margin-bottom: 10px; line-height: 1.5; }
+
+    .sa-check-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f0f0f5; }
+    .sa-check-row input[type="checkbox"] { accent-color: #5577cc; flex-shrink: 0; }
+    .sa-check-label { font-size: 11px; color: #333; font-weight: 500; white-space: nowrap; font-family: 'SF Mono', 'Fira Code', monospace; }
+    .sa-sample { font-size: 9px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: right; }
+
+    .sa-mapper-section { margin-top: 4px; }
+    .sa-ctrl-section { margin-top: 4px; }
+
+    .sa-scroll::-webkit-scrollbar { width: 6px; }
+    .sa-scroll::-webkit-scrollbar-track { background: transparent; }
+    .sa-scroll::-webkit-scrollbar-thumb { background: #d0d0d8; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="canvas-container">
+      <canvas id="gpu-canvas"></canvas>
+    </div>
+    <div id="panel"></div>
+  </div>
+  <div id="error-overlay">
+    <div id="error-box">
+      <h2>WebGPU Not Available</h2>
+      <p>This visualizer requires WebGPU support.<br>Please use Chrome 113+, Edge 113+, or Brave with WebGPU enabled.</p>
+    </div>
+  </div>
+  <script type="module" src="/src/standalone.ts"></script>
+</body>
+</html>

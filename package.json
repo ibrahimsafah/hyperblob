@@ -15,6 +15,7 @@
     "dev": "vite",
     "build:lib": "tsc && vite build --mode lib",
     "build:app": "tsc && vite build",
+    "build:standalone": "tsc && vite build --mode standalone && node scripts/bundle-standalone.js",
     "build": "npm run build:lib && npm run build:app",
     "preview": "vite preview",
     "test:unit": "vitest run",
