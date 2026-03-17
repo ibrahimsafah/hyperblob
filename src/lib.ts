@@ -572,6 +572,57 @@ export class HyperblobEngine {
 
   // ── Simulation control ──
 
+  /**
+   * Run the simulation to convergence without rendering.
+   * Submits ~N GPU ticks in a tight loop, waits for completion,
+   * then updates CPU positions and fits the camera.
+   */
+  async converge(): Promise<void> {
+    if (!this.simulation || !this.graphData) return;
+
+    // Calculate iterations: solve for n where energy ≈ idleEnergy
+    // energy_n = (energy_0 - idle) * (1 - rate)^n + idle
+    const { energy, idleEnergy, coolingRate, stopThreshold } = this.simParams;
+    const delta = energy - idleEnergy;
+    const target = Math.max(stopThreshold, idleEnergy * 0.05);
+    let iterations: number;
+    if (delta <= target || coolingRate <= 0) {
+      iterations = 50;
+    } else {
+      iterations = Math.ceil(Math.log(target / delta) / Math.log(1 - coolingRate));
+    }
+    iterations = Math.min(Math.max(iterations, 50), 1000);
+
+    // Pause normal render-loop simulation during convergence
+    const wasRunning = this.simParams.running;
+    this.simParams.running = false;
+
+    // Run simulation ticks — GPU queue serializes them
+    for (let i = 0; i < iterations; i++) {
+      this.simulation.tick(this.simParams);
+      this.simParams.energy += (this.simParams.idleEnergy - this.simParams.energy) * this.simParams.coolingRate;
+    }
+
+    // Wait for all GPU work to finish
+    await this.gpu.device.queue.onSubmittedWorkDone();
+
+    // Read back final positions
+    if (this.buffers.hasBuffer('node-positions')) {
+      this.cpuPositions = await this.buffers.readBuffer('node-positions', this.nodeCount * 16);
+    }
+
+    // Trigger hull recompute with fresh positions
+    if (this.hullRendererInstance) {
+      this.hullRendererInstance.forceRecompute();
+    }
+
+    // Fit camera to converged layout
+    await this.fitToScreen();
+
+    // Restore simulation state (energy is now at idle)
+    this.simParams.running = wasRunning;
+  }
+
   resetSimulation(): void {
     if (!this.graphData) return;
     this.simParams.energy = 1.0;

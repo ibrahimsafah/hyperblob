@@ -5,6 +5,7 @@ export function createSimulationTab(
   simParams: SimulationParams,
   onToggle: (running: boolean) => void,
   onReset: () => void,
+  onConverge: () => void,
 ): { el: HTMLElement; dispose: () => void } {
   const tab = document.createElement('div');
   tab.className = 'panel-tab-content';
@@ -35,7 +36,18 @@ export function createSimulationTab(
     },
   });
 
+  const convergeBtn = createButton({
+    label: 'Converge',
+    variant: 'default',
+    onClick: () => {
+      simParams.running = false;
+      playBtn.textContent = 'Play';
+      onConverge();
+    },
+  });
+
   btnRow.appendChild(playBtn);
+  btnRow.appendChild(convergeBtn);
   btnRow.appendChild(resetBtn);
   tab.appendChild(btnRow);
 

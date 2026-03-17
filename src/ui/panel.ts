@@ -13,6 +13,7 @@ export interface PanelConfig {
   onGenerate: (nodeCount: number, heCount: number, maxSize: number) => void;
   onSimulationToggle: (running: boolean) => void;
   onSimulationReset: () => void;
+  onSimulationConverge: () => void;
   onFitToScreen: () => void;
 }
 
@@ -50,6 +51,7 @@ export class Panel {
       config.simParams,
       config.onSimulationToggle,
       config.onSimulationReset,
+      config.onSimulationConverge,
     );
     this.disposers.push(simTabResult.dispose);
 

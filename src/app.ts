@@ -67,6 +67,7 @@ export class App {
         },
         onSimulationToggle: (running: boolean) => { this.engine.simParams.running = running; },
         onSimulationReset: () => this.engine.resetSimulation(),
+        onSimulationConverge: () => this.engine.converge(),
         onFitToScreen: () => this.engine.fitToScreen(),
       });
     } catch {
