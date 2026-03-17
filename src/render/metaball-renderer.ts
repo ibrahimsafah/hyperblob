@@ -305,6 +305,12 @@ export class MetaballRenderer {
       const edge = this.lastEdges[e];
       if (edge.memberIndices.length < 2) continue;
 
+      // Compute MST early so we can account for bridge sigma in bbox rejection
+      const pts = edge.memberIndices.map(ni => [
+        positions[ni * 4], positions[ni * 4 + 1],
+      ] as [number, number]);
+      const mstEdges = computeMST(pts);
+
       // Quick bounding-box rejection
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const ni of edge.memberIndices) {
@@ -314,7 +320,13 @@ export class MetaballRenderer {
         if (x > maxX) maxX = x;
         if (y > maxY) maxY = y;
       }
-      const pad = sigma * 3;
+      let maxBridgeSigma = sigma;
+      for (const [ai, bi] of mstEdges) {
+        const dx = pts[bi][0] - pts[ai][0], dy = pts[bi][1] - pts[ai][1];
+        const edgeLen = Math.sqrt(dx * dx + dy * dy);
+        maxBridgeSigma = Math.max(maxBridgeSigma, edgeLen * 0.12);
+      }
+      const pad = Math.max(sigma * 3, maxBridgeSigma * 3);
       if (worldX < minX - pad || worldX > maxX + pad ||
           worldY < minY - pad || worldY > maxY + pad) {
         continue;
@@ -330,12 +342,6 @@ export class MetaballRenderer {
           fieldVal += Math.exp(-dSq * invTwoSigmaSq);
         }
       }
-
-      // Evaluate bridge field (MST)
-      const pts = edge.memberIndices.map(ni => [
-        positions[ni * 4], positions[ni * 4 + 1],
-      ] as [number, number]);
-      const mstEdges = computeMST(pts);
       for (const [ai, bi] of mstEdges) {
         const ax = pts[ai][0], ay = pts[ai][1];
         const bx = pts[bi][0], by = pts[bi][1];

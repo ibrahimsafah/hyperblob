@@ -6,7 +6,7 @@
 import type { GPUContext } from '../gpu/device';
 import type { BufferManager } from '../gpu/buffer-manager';
 import type { Camera } from './camera';
-import type { HypergraphData, RenderParams } from '../data/types';
+import type { HypergraphData, RenderParams, HullMode } from '../data/types';
 import type { HullData } from './hull-compute';
 import { HullCompute } from './hull-compute';
 import { MetaballRenderer } from './metaball-renderer';
@@ -332,9 +332,9 @@ export class HullRenderer {
 
   /** Point-in-polygon hit test against cached hulls (ray-casting algorithm).
    *  Tests in reverse order so the topmost (last-rendered) hull wins. */
-  hitTest(worldX: number, worldY: number): number | null {
+  hitTest(worldX: number, worldY: number, hullMode: HullMode = 'convex'): number | null {
     // Metaball mode: delegate to field evaluation
-    if (this.metaballRenderer) {
+    if (hullMode === 'metaball' && this.metaballRenderer) {
       return this.metaballRenderer.hitTest(worldX, worldY);
     }
 

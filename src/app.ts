@@ -100,6 +100,7 @@ export class App {
 
   dispose(): void {
     this.disposed = true;
+    this.engine.dispose();
     this.panelInstance?.dispose();
     this.panelInstance = null;
   }

@@ -9,7 +9,7 @@ WebGPU hypergraph visualizer with GPU Barnes-Hut force-directed layout. Hyperedg
 ```bash
 npm run dev          # Dev server at localhost:5173
 npm run build        # tsc + vite build
-npm run test:unit    # Vitest (178 tests)
+npm run test:unit    # Vitest (unit tests)
 npm run test:e2e     # Playwright + Brave
 ```
 
@@ -20,8 +20,8 @@ npm run test:e2e     # Playwright + Brave
 - `src/render/hull-compute.ts` — CPU-side Andrew's monotone chain (convex mode). Runs every 10 frames.
 - `src/render/hull-renderer.ts` — Must call `.setData(data)` after construction or hulls won't render. Branches on `renderParams.hullMode` (convex vs metaball).
 - `src/render/metaball-renderer.ts` — Screen-space fragment shader metaballs. Instanced bounding-box quads with per-pixel Gaussian field evaluation + MST bridge capsule SDFs.
-- `src/render/metaball-hull.ts` — CPU algorithms: marching squares, contour stitching, ear-clip triangulation, Chaikin smoothing. Used for hit testing and CPU-only fallback.
-- `src/render/metaball-compute.ts` — **DEAD CODE** (legacy GPU compute → CPU readback pipeline, replaced by metaball-renderer.ts).
+- `src/render/metaball-hull.ts` — `computeMST` (Prim's MST for bridge field) and `distToSegmentSq` (hit testing). Used by metaball-renderer.ts.
+- `src/gpu/gpu-profiler.ts` — Optional per-stage GPU timestamp profiling. No-ops when `timestamp-query` feature unavailable.
 
 ## Simulation Parameters
 
@@ -63,4 +63,3 @@ Parameters use physics-inspired names (not D3-style alpha):
 
 - Production build only bundles 13 modules (dynamic imports with @vite-ignore bypass Vite bundling)
 - E2E tests need Brave browser at `/Applications/Brave Browser.app/Contents/MacOS/Brave Browser`
-- Legacy `metaball-compute.ts` and `metaball-field.wgsl` can be deleted (dead code)

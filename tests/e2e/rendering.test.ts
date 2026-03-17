@@ -42,7 +42,7 @@ test.describe('Rendering', () => {
       const app = (window as any).__app;
       if (!app) return false;
       // If the app has node count > 0, it means rendering is happening
-      return app.getNodeCount() > 0;
+      return app?.engine?.getNodeCount() > 0;
     });
 
     expect(hasContent).toBe(true);
@@ -53,7 +53,7 @@ test.describe('Rendering', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -79,7 +79,7 @@ test.describe('Rendering', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );

@@ -6,7 +6,7 @@ test.describe('Control Panel', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -60,7 +60,7 @@ test.describe('Control Panel', () => {
   test('simulation parameters are accessible', async ({ page }) => {
     const simParams = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams();
+      return app.engine.simParams;
     });
 
     expect(simParams).toBeDefined();
@@ -73,7 +73,7 @@ test.describe('Control Panel', () => {
   test('render parameters are accessible', async ({ page }) => {
     const renderParams = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams();
+      return app.engine.renderParams;
     });
 
     expect(renderParams).toBeDefined();
@@ -86,13 +86,13 @@ test.describe('Control Panel', () => {
     // Modify a simulation parameter
     await page.evaluate(() => {
       const app = (window as any).__app;
-      const params = app.getSimParams();
+      const params = app.engine.simParams;
       params.repulsionStrength = -500;
     });
 
     const repulsion = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().repulsionStrength;
+      return app.engine.simParams.repulsionStrength;
     });
 
     expect(repulsion).toBe(-500);
@@ -102,13 +102,13 @@ test.describe('Control Panel', () => {
     // Modify a render parameter
     await page.evaluate(() => {
       const app = (window as any).__app;
-      const params = app.getRenderParams();
+      const params = app.engine.renderParams;
       params.nodeBaseSize = 12;
     });
 
     const nodeSize = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams().nodeBaseSize;
+      return app.engine.renderParams.nodeBaseSize;
     });
 
     expect(nodeSize).toBe(12);

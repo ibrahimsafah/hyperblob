@@ -1,4 +1,5 @@
 import type { BufferManager } from '../gpu/buffer-manager';
+import type { GPUProfiler } from '../gpu/gpu-profiler';
 import quadtreeBuildShader from '../shaders/quadtree-build.wgsl?raw';
 import quadtreeSummarizeShader from '../shaders/quadtree-summarize.wgsl?raw';
 
@@ -29,15 +30,27 @@ export class GPUQuadtree {
 
   private buildBGL: GPUBindGroupLayout;
   private summarizeBGL: GPUBindGroupLayout;
+  private profiler: GPUProfiler | null = null;
+
+  // Cached bind groups
+  private buildBindGroup: GPUBindGroup | null = null;
+  private summarizeBindGroup: GPUBindGroup | null = null;
+
+  // Pre-allocated param arrays with dual views
+  private buildParamsArray = new Uint32Array(4);
+  private summarizeParamsBuf = new ArrayBuffer(16);
+  private summarizeParamsU32 = new Uint32Array(this.summarizeParamsBuf);
+  private summarizeParamsF32 = new Float32Array(this.summarizeParamsBuf);
 
   // Tree parameters
   treeSize = 0;       // total nodes in tree
   leafOffset = 0;     // first leaf index
   numLevels = 0;      // number of levels in tree
 
-  constructor(device: GPUDevice, bufferManager: BufferManager) {
+  constructor(device: GPUDevice, bufferManager: BufferManager, profiler?: GPUProfiler) {
     this.device = device;
     this.bufferManager = bufferManager;
+    this.profiler = profiler ?? null;
 
     // Build pipeline
     const buildModule = device.createShaderModule({
@@ -139,27 +152,14 @@ export class GPUQuadtree {
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       'quadtree-summarize-params',
     );
+
+    this.rebuildBindGroups();
   }
 
-  /**
-   * Encode the tree build + summarize passes into the command encoder.
-   * Assumes positions and sorted-indices buffers are ready.
-   */
-  encode(encoder: GPUCommandEncoder, nodeCount: number, rootSize: number): void {
-    if (nodeCount === 0) return;
-
-    // Clear tree buffer to zeros
+  private rebuildBindGroups(): void {
     const treeBuffer = this.bufferManager.getBuffer('quadtree');
-    const zeros = new Float32Array(this.treeSize * 8);
-    this.device.queue.writeBuffer(treeBuffer, 0, zeros);
 
-    // Step 1: Build leaves from sorted nodes
-    const buildParams = new Uint32Array([nodeCount, this.treeSize, this.leafOffset, 0]);
-    this.device.queue.writeBuffer(
-      this.bufferManager.getBuffer('quadtree-build-params'), 0, buildParams,
-    );
-
-    const buildBG = this.device.createBindGroup({
+    this.buildBindGroup = this.device.createBindGroup({
       label: 'quadtree-build-bg',
       layout: this.buildBGL,
       entries: [
@@ -170,9 +170,38 @@ export class GPUQuadtree {
       ],
     });
 
-    const buildPass = encoder.beginComputePass({ label: 'quadtree-build' });
+    this.summarizeBindGroup = this.device.createBindGroup({
+      label: 'quadtree-summarize-bg',
+      layout: this.summarizeBGL,
+      entries: [
+        { binding: 0, resource: { buffer: treeBuffer } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('quadtree-summarize-params') } },
+      ],
+    });
+  }
+
+  /**
+   * Encode the tree build + summarize passes into the command encoder.
+   * Assumes positions and sorted-indices buffers are ready.
+   */
+  encode(encoder: GPUCommandEncoder, nodeCount: number, rootSize: number): void {
+    if (nodeCount === 0) return;
+
+    // Clear tree buffer to zeros on GPU (no CPU allocation)
+    encoder.clearBuffer(this.bufferManager.getBuffer('quadtree'));
+
+    // Step 1: Build leaves from sorted nodes
+    this.buildParamsArray[0] = nodeCount;
+    this.buildParamsArray[1] = this.treeSize;
+    this.buildParamsArray[2] = this.leafOffset;
+    this.buildParamsArray[3] = 0;
+    this.device.queue.writeBuffer(
+      this.bufferManager.getBuffer('quadtree-build-params'), 0, this.buildParamsArray,
+    );
+
+    const buildPass = encoder.beginComputePass({ label: 'quadtree-build', timestampWrites: this.profiler?.timestampWrites('quadtree') });
     buildPass.setPipeline(this.buildPipeline);
-    buildPass.setBindGroup(0, buildBG);
+    buildPass.setBindGroup(0, this.buildBindGroup!);
     buildPass.dispatchWorkgroups(Math.ceil(nodeCount / 256));
     buildPass.end();
 
@@ -184,29 +213,18 @@ export class GPUQuadtree {
       const nodesAtLevel = Math.pow(4, level);
       const levelStart = level === 0 ? 0 : (nodesAtLevel - 1) / 3;
 
-      const summarizeParams = new Float32Array(4);
-      const u32View = new Uint32Array(summarizeParams.buffer);
-      u32View[0] = levelStart;
-      u32View[1] = nodesAtLevel;
-      u32View[2] = this.treeSize;
-      summarizeParams[3] = rootSize;
+      this.summarizeParamsU32[0] = levelStart;
+      this.summarizeParamsU32[1] = nodesAtLevel;
+      this.summarizeParamsU32[2] = this.treeSize;
+      this.summarizeParamsF32[3] = rootSize;
 
       this.device.queue.writeBuffer(
-        this.bufferManager.getBuffer('quadtree-summarize-params'), 0, summarizeParams,
+        this.bufferManager.getBuffer('quadtree-summarize-params'), 0, this.summarizeParamsBuf,
       );
 
-      const summarizeBG = this.device.createBindGroup({
-        label: `quadtree-summarize-bg-level${level}`,
-        layout: this.summarizeBGL,
-        entries: [
-          { binding: 0, resource: { buffer: treeBuffer } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('quadtree-summarize-params') } },
-        ],
-      });
-
-      const sumPass = encoder.beginComputePass({ label: `quadtree-summarize-${level}` });
+      const sumPass = encoder.beginComputePass({ label: `quadtree-summarize-${level}`, timestampWrites: this.profiler?.timestampWrites('quadtree') });
       sumPass.setPipeline(this.summarizePipeline);
-      sumPass.setBindGroup(0, summarizeBG);
+      sumPass.setBindGroup(0, this.summarizeBindGroup!);
       sumPass.dispatchWorkgroups(Math.ceil(nodesAtLevel / 256));
       sumPass.end();
     }

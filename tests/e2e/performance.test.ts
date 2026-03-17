@@ -6,7 +6,7 @@ test.describe('Performance', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -42,14 +42,14 @@ test.describe('Performance', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const nodeBaseSize = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams().nodeBaseSize;
+      return app.engine.renderParams.nodeBaseSize;
     });
 
     expect(nodeBaseSize).toBe(6); // default
@@ -106,7 +106,7 @@ test.describe('Performance', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -151,7 +151,7 @@ test.describe('Performance', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -162,7 +162,7 @@ test.describe('Performance', () => {
     // Check that the app is still running
     const stillRunning = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app && app.getNodeCount() > 0;
+      return app?.engine?.getNodeCount() > 0;
     });
 
     expect(stillRunning).toBe(true);

@@ -6,14 +6,14 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const isRunning = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().running;
+      return app.engine.simParams.running;
     });
     expect(isRunning).toBe(true);
   });
@@ -23,14 +23,14 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const energy = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().energy;
+      return app.engine.simParams.energy;
     });
 
     // Energy should be near 1.0 right after loading (might have decayed slightly)
@@ -43,7 +43,7 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -52,8 +52,8 @@ test.describe('Force Simulation', () => {
     const snapshot1 = await page.evaluate(() => {
       const app = (window as any).__app;
       return {
-        energy: app.getSimParams().energy,
-        camera: [...app.getCamera().center],
+        energy: app.engine.simParams.energy,
+        camera: [...app.engine.getCamera().center],
       };
     });
 
@@ -64,8 +64,8 @@ test.describe('Force Simulation', () => {
     const snapshot2 = await page.evaluate(() => {
       const app = (window as any).__app;
       return {
-        energy: app.getSimParams().energy,
-        camera: [...app.getCamera().center],
+        energy: app.engine.simParams.energy,
+        camera: [...app.engine.getCamera().center],
       };
     });
 
@@ -78,21 +78,21 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const energy1 = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().energy;
+      return app.engine.simParams.energy;
     });
 
     await page.waitForTimeout(3000);
 
     const energy2 = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().energy;
+      return app.engine.simParams.energy;
     });
 
     expect(energy2).toBeLessThan(energy1);
@@ -103,7 +103,7 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -112,7 +112,7 @@ test.describe('Force Simulation', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        const params = app.getSimParams();
+        const params = app.engine.simParams;
         return params.energy <= params.stopThreshold;
       },
       { timeout: 30000 }
@@ -120,7 +120,7 @@ test.describe('Force Simulation', () => {
 
     const energy = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getSimParams().energy;
+      return app.engine.simParams.energy;
     });
 
     expect(energy).toBeLessThanOrEqual(0.001);

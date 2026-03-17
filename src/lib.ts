@@ -4,6 +4,7 @@
 
 import { initWebGPU, type GPUContext } from './gpu/device';
 import { BufferManager } from './gpu/buffer-manager';
+import { GPUProfiler, type GPUStageTiming } from './gpu/gpu-profiler';
 import { Camera } from './render/camera';
 import { getPaletteColors } from './utils/color';
 import { Tooltip } from './ui/tooltip';
@@ -85,6 +86,8 @@ export class HyperblobEngine {
   private lastHoveredNode: number | null = null;
   private lastHoveredEdge: number | null = null;
 
+  private profiler: GPUProfiler;
+
   private running = false;
   private disposed = false;
 
@@ -102,6 +105,7 @@ export class HyperblobEngine {
     this.buffers = new BufferManager(gpu.device);
     this.camera = new Camera();
     this.options = options;
+    this.profiler = new GPUProfiler(gpu.device, gpu.supportsTimestampQuery);
     this.simParams = { ...defaultSimulationParams(), ...options.simParams };
     this.renderParams = { ...defaultRenderParams(), ...options.renderParams };
 
@@ -358,7 +362,7 @@ export class HyperblobEngine {
     this.hullRendererInstance.setData(data);
 
     // Setup force simulation
-    this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams);
+    this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams, this.profiler, this.gpu.features);
 
     this.simParams.energy = 1.0;
     this.simParams.running = true;
@@ -376,6 +380,7 @@ export class HyperblobEngine {
     this.disposed = true;
     this.running = false;
     this.inputHandlerInstance?.dispose();
+    this.profiler.destroy();
     this.buffers.destroyAll();
   }
 
@@ -384,6 +389,7 @@ export class HyperblobEngine {
   getGraphData(): HypergraphData | null { return this.graphData; }
   getBufferManager(): BufferManager { return this.buffers; }
   getGPU(): GPUContext { return this.gpu; }
+  getGPUTimings(): GPUStageTiming[] | null { return this.profiler.getLatestTimings(); }
 
   handleResize(): void {
     const canvas = this.gpu.canvas;
@@ -793,7 +799,7 @@ export class HyperblobEngine {
   // ── Internal: hit testing ──
 
   private hitTestEdge(worldX: number, worldY: number): number | null {
-    return this.hullRendererInstance?.hitTest(worldX, worldY) ?? null;
+    return this.hullRendererInstance?.hitTest(worldX, worldY, this.renderParams.hullMode) ?? null;
   }
 
   private hitTestNode(worldX: number, worldY: number): number | null {

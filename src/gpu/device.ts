@@ -3,6 +3,8 @@ export interface GPUContext {
   context: GPUCanvasContext;
   format: GPUTextureFormat;
   canvas: HTMLCanvasElement;
+  supportsTimestampQuery: boolean;
+  features: ReadonlySet<string>;
 }
 
 export async function initWebGPU(canvas: HTMLCanvasElement): Promise<GPUContext> {
@@ -30,7 +32,17 @@ export async function initWebGPU(canvas: HTMLCanvasElement): Promise<GPUContext>
   want('maxComputeInvocationsPerWorkgroup', 256);
   want('maxStorageBuffersPerShaderStage', 8);
 
-  const device = await adapter.requestDevice({ requiredLimits });
+  // Feature detection: timestamp-query, subgroups
+  const requiredFeatures: GPUFeatureName[] = [];
+  const supportsTimestampQuery = adapter.features.has('timestamp-query');
+  if (supportsTimestampQuery) {
+    requiredFeatures.push('timestamp-query');
+  }
+  if (adapter.features.has('subgroups' as GPUFeatureName)) {
+    requiredFeatures.push('subgroups' as GPUFeatureName);
+  }
+
+  const device = await adapter.requestDevice({ requiredLimits, requiredFeatures });
 
   device.lost.then((info) => {
     console.error('WebGPU device lost:', info.message);
@@ -52,5 +64,5 @@ export async function initWebGPU(canvas: HTMLCanvasElement): Promise<GPUContext>
     alphaMode: 'premultiplied',
   });
 
-  return { device, context, format, canvas };
+  return { device, context, format, canvas, supportsTimestampQuery, features: device.features };
 }

@@ -1,5 +1,6 @@
 import type { BufferManager } from '../gpu/buffer-manager';
 import type { HypergraphData, SimulationParams } from '../data/types';
+import type { GPUProfiler } from '../gpu/gpu-profiler';
 import { RadixSort } from './radix-sort';
 import { GPUQuadtree } from './quadtree';
 
@@ -49,6 +50,37 @@ export class ForceSimulation {
   private centerBGL: GPUBindGroupLayout;
   private integrateBGL: GPUBindGroupLayout;
 
+  // Cached bind groups (rebuilt only when buffers change)
+  private mortonBindGroup!: GPUBindGroup;
+  private repulsionBindGroup!: GPUBindGroup;
+  private attractionBindGroup!: GPUBindGroup;
+  private centerBindGroup!: GPUBindGroup;
+  private integrateBindGroup!: GPUBindGroup;
+
+  // Pre-allocated param arrays with dual views (zero per-frame allocations)
+  private mortonParams = new ArrayBuffer(32);
+  private mortonParamsF32 = new Float32Array(this.mortonParams);
+  private mortonParamsU32 = new Uint32Array(this.mortonParams);
+
+  private repulsionParams = new ArrayBuffer(48);
+  private repulsionParamsF32 = new Float32Array(this.repulsionParams);
+  private repulsionParamsU32 = new Uint32Array(this.repulsionParams);
+
+  private attractionParams = new ArrayBuffer(32);
+  private attractionParamsF32 = new Float32Array(this.attractionParams);
+  private attractionParamsU32 = new Uint32Array(this.attractionParams);
+
+  private centerParams = new ArrayBuffer(16);
+  private centerParamsF32 = new Float32Array(this.centerParams);
+  private centerParamsU32 = new Uint32Array(this.centerParams);
+
+  private integrateParams = new ArrayBuffer(16);
+  private integrateParamsF32 = new Float32Array(this.integrateParams);
+  private integrateParamsU32 = new Uint32Array(this.integrateParams);
+
+  // Profiler (optional)
+  private profiler: GPUProfiler | null = null;
+
   // Bounding box tracking (updated from CPU periodically)
   private bounds = { minX: -500, minY: -500, maxX: 500, maxY: 500 };
   private boundsFrameCounter = 0;
@@ -59,6 +91,8 @@ export class ForceSimulation {
     bufferManager: BufferManager,
     data: HypergraphData,
     _params: SimulationParams,
+    profiler?: GPUProfiler,
+    features: ReadonlySet<string> = new Set(),
   ) {
     this.device = device;
     this.bufferManager = bufferManager;
@@ -68,9 +102,11 @@ export class ForceSimulation {
     // Allocate work buffers
     this.allocateBuffers();
 
+    this.profiler = profiler ?? null;
+
     // Create sub-systems
-    this.radixSort = new RadixSort(device, bufferManager, this.nodeCount);
-    this.quadtree = new GPUQuadtree(device, bufferManager);
+    this.radixSort = new RadixSort(device, bufferManager, this.nodeCount, profiler, features);
+    this.quadtree = new GPUQuadtree(device, bufferManager, profiler);
     this.quadtree.ensureBuffers(this.nodeCount);
 
     // Create pipelines
@@ -161,6 +197,9 @@ export class ForceSimulation {
       layout: device.createPipelineLayout({ bindGroupLayouts: [this.integrateBGL] }),
       compute: { module: integrateModule, entryPoint: 'main' },
     });
+
+    // Cache bind groups (all buffers are created and stable)
+    this.rebuildBindGroups();
   }
 
   private allocateBuffers(): void {
@@ -197,6 +236,56 @@ export class ForceSimulation {
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'integrate-params');
   }
 
+  private rebuildBindGroups(): void {
+    this.mortonBindGroup = this.device.createBindGroup({
+      layout: this.mortonBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('morton-codes') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('sorted-indices') } },
+        { binding: 3, resource: { buffer: this.bufferManager.getBuffer('morton-params') } },
+      ],
+    });
+
+    this.repulsionBindGroup = this.device.createBindGroup({
+      layout: this.repulsionBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('quadtree') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('repulsion-params') } },
+      ],
+    });
+
+    this.attractionBindGroup = this.device.createBindGroup({
+      layout: this.attractionBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('attraction-forces') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('he-offsets') } },
+        { binding: 3, resource: { buffer: this.bufferManager.getBuffer('he-members') } },
+        { binding: 4, resource: { buffer: this.bufferManager.getBuffer('attraction-params') } },
+      ],
+    });
+
+    this.centerBindGroup = this.device.createBindGroup({
+      layout: this.centerBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('center-sum') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('center-params') } },
+      ],
+    });
+
+    this.integrateBindGroup = this.device.createBindGroup({
+      layout: this.integrateBGL,
+      entries: [
+        { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
+        { binding: 1, resource: { buffer: this.bufferManager.getBuffer('attraction-forces') } },
+        { binding: 2, resource: { buffer: this.bufferManager.getBuffer('integrate-params') } },
+      ],
+    });
+  }
+
   /**
    * Perform one simulation tick. Dispatches all compute passes.
    */
@@ -206,13 +295,12 @@ export class ForceSimulation {
     const encoder = this.device.createCommandEncoder({ label: 'force-simulation-tick' });
     const workgroups = Math.ceil(this.nodeCount / 256);
 
+    this.profiler?.beginFrame();
+
     // --- Periodically update bounding box from CPU ---
     this.boundsFrameCounter++;
-    // We can't read back every frame, so we use a generous estimate
-    // that grows with the simulation. Initial bounds are set in constructor.
     if (this.boundsFrameCounter >= this.boundsUpdateInterval) {
       this.boundsFrameCounter = 0;
-      // Schedule async readback for next frame's bounds
       this.updateBoundsAsync();
     }
 
@@ -224,33 +312,20 @@ export class ForceSimulation {
     const rootSize = Math.max(bMaxX - bMinX, bMaxY - bMinY);
 
     // --- 1. Morton code computation ---
+    this.mortonParamsF32[0] = bMinX;
+    this.mortonParamsF32[1] = bMinY;
+    this.mortonParamsF32[2] = bMaxX;
+    this.mortonParamsF32[3] = bMaxY;
+    this.mortonParamsU32[4] = this.nodeCount;
+    this.mortonParamsU32[5] = 0;
+    this.mortonParamsU32[6] = 0;
+    this.mortonParamsU32[7] = 0;
+    this.device.queue.writeBuffer(this.bufferManager.getBuffer('morton-params'), 0, this.mortonParams);
+
     {
-      const paramsData = new ArrayBuffer(32);
-      const f32 = new Float32Array(paramsData);
-      const u32 = new Uint32Array(paramsData);
-      f32[0] = bMinX;
-      f32[1] = bMinY;
-      f32[2] = bMaxX;
-      f32[3] = bMaxY;
-      u32[4] = this.nodeCount;
-      u32[5] = 0;
-      u32[6] = 0;
-      u32[7] = 0;
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('morton-params'), 0, paramsData);
-
-      const bg = this.device.createBindGroup({
-        layout: this.mortonBGL,
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('morton-codes') } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer('sorted-indices') } },
-          { binding: 3, resource: { buffer: this.bufferManager.getBuffer('morton-params') } },
-        ],
-      });
-
-      const pass = encoder.beginComputePass({ label: 'morton' });
+      const pass = encoder.beginComputePass({ label: 'morton', timestampWrites: this.profiler?.timestampWrites('morton') });
       pass.setPipeline(this.mortonPipeline);
-      pass.setBindGroup(0, bg);
+      pass.setBindGroup(0, this.mortonBindGroup);
       pass.dispatchWorkgroups(workgroups);
       pass.end();
     }
@@ -262,151 +337,98 @@ export class ForceSimulation {
     this.quadtree.encode(encoder, this.nodeCount, rootSize);
 
     // --- 5. Barnes-Hut repulsion ---
+    this.repulsionParamsF32[0] = params.repulsionStrength;
+    this.repulsionParamsF32[1] = params.attractionStrength;
+    this.repulsionParamsF32[2] = params.linkDistance;
+    this.repulsionParamsF32[3] = params.centerStrength;
+    this.repulsionParamsF32[4] = params.velocityDecay;
+    this.repulsionParamsF32[5] = params.energy;
+    this.repulsionParamsF32[6] = params.idleEnergy;
+    this.repulsionParamsF32[7] = params.coolingRate;
+    this.repulsionParamsF32[8] = params.stopThreshold;
+    this.repulsionParamsF32[9] = params.theta;
+    this.repulsionParamsU32[10] = this.nodeCount;
+    this.repulsionParamsU32[11] = this.quadtree.treeSize;
+    this.device.queue.writeBuffer(this.bufferManager.getBuffer('repulsion-params'), 0, this.repulsionParams);
+
     {
-      const paramsData = new ArrayBuffer(48);
-      const f32 = new Float32Array(paramsData);
-      const u32 = new Uint32Array(paramsData);
-      f32[0] = params.repulsionStrength;
-      f32[1] = params.attractionStrength;
-      f32[2] = params.linkDistance;
-      f32[3] = params.centerStrength;
-      f32[4] = params.velocityDecay;
-      f32[5] = params.energy;
-      f32[6] = params.idleEnergy;
-      f32[7] = params.coolingRate;
-      f32[8] = params.stopThreshold;
-      f32[9] = params.theta;
-      u32[10] = this.nodeCount;
-      u32[11] = this.quadtree.treeSize;
-
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('repulsion-params'), 0, paramsData);
-
-      const bg = this.device.createBindGroup({
-        layout: this.repulsionBGL,
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('quadtree') } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer('repulsion-params') } },
-        ],
-      });
-
-      const pass = encoder.beginComputePass({ label: 'repulsion' });
+      const pass = encoder.beginComputePass({ label: 'repulsion', timestampWrites: this.profiler?.timestampWrites('repulsion') });
       pass.setPipeline(this.repulsionPipeline);
-      pass.setBindGroup(0, bg);
+      pass.setBindGroup(0, this.repulsionBindGroup);
       pass.dispatchWorkgroups(workgroups);
       pass.end();
     }
 
     // --- 6. Link attraction ---
     if (this.edgeCount > 0) {
-      // Clear attraction forces buffer
-      const clearData = new Int32Array(this.nodeCount * 2);
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('attraction-forces'), 0, clearData);
+      // Clear attraction forces buffer on GPU (no CPU allocation)
+      encoder.clearBuffer(this.bufferManager.getBuffer('attraction-forces'));
 
-      // Compute total pairs for the params
-      const paramsData = new ArrayBuffer(32);
-      const f32 = new Float32Array(paramsData);
-      const u32 = new Uint32Array(paramsData);
-      f32[0] = params.attractionStrength;
-      f32[1] = params.linkDistance;
-      f32[2] = params.energy;
-      u32[3] = 0; // total_pairs (unused, kept for alignment)
-      u32[4] = this.edgeCount;
-      u32[5] = 0;
-      u32[6] = 0;
-      u32[7] = 0;
-
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('attraction-params'), 0, paramsData);
-
-      const bg = this.device.createBindGroup({
-        layout: this.attractionBGL,
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('attraction-forces') } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer('he-offsets') } },
-          { binding: 3, resource: { buffer: this.bufferManager.getBuffer('he-members') } },
-          { binding: 4, resource: { buffer: this.bufferManager.getBuffer('attraction-params') } },
-        ],
-      });
+      this.attractionParamsF32[0] = params.attractionStrength;
+      this.attractionParamsF32[1] = params.linkDistance;
+      this.attractionParamsF32[2] = params.energy;
+      this.attractionParamsU32[3] = 0;
+      this.attractionParamsU32[4] = this.edgeCount;
+      this.attractionParamsU32[5] = 0;
+      this.attractionParamsU32[6] = 0;
+      this.attractionParamsU32[7] = 0;
+      this.device.queue.writeBuffer(this.bufferManager.getBuffer('attraction-params'), 0, this.attractionParams);
 
       const edgeWorkgroups = Math.ceil(this.edgeCount / 256);
-      const pass = encoder.beginComputePass({ label: 'attraction' });
+      const pass = encoder.beginComputePass({ label: 'attraction', timestampWrites: this.profiler?.timestampWrites('attraction') });
       pass.setPipeline(this.attractionPipeline);
-      pass.setBindGroup(0, bg);
+      pass.setBindGroup(0, this.attractionBindGroup);
       pass.dispatchWorkgroups(edgeWorkgroups);
       pass.end();
     }
 
     // --- 7. Center force ---
+    // Clear center sum on GPU (no CPU allocation)
+    encoder.clearBuffer(this.bufferManager.getBuffer('center-sum'));
+
+    this.centerParamsF32[0] = params.centerStrength;
+    this.centerParamsF32[1] = params.energy;
+    this.centerParamsU32[2] = this.nodeCount;
+    this.centerParamsU32[3] = 0;
+    this.device.queue.writeBuffer(this.bufferManager.getBuffer('center-params'), 0, this.centerParams);
+
     {
-      // Clear center sum
-      const clearData = new Int32Array(2);
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('center-sum'), 0, clearData);
-
-      const paramsData = new ArrayBuffer(16);
-      const f32 = new Float32Array(paramsData);
-      const u32 = new Uint32Array(paramsData);
-      f32[0] = params.centerStrength;
-      f32[1] = params.energy;
-      u32[2] = this.nodeCount;
-      u32[3] = 0;
-
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('center-params'), 0, paramsData);
-
-      const bg = this.device.createBindGroup({
-        layout: this.centerBGL,
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('center-sum') } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer('center-params') } },
-        ],
-      });
-
-      // Accumulate pass
-      const accumPass = encoder.beginComputePass({ label: 'center-accumulate' });
+      const accumPass = encoder.beginComputePass({ label: 'center-accumulate', timestampWrites: this.profiler?.timestampWrites('center') });
       accumPass.setPipeline(this.centerAccumPipeline);
-      accumPass.setBindGroup(0, bg);
+      accumPass.setBindGroup(0, this.centerBindGroup);
       accumPass.dispatchWorkgroups(workgroups);
       accumPass.end();
 
-      // Apply pass
-      const applyPass = encoder.beginComputePass({ label: 'center-apply' });
+      const applyPass = encoder.beginComputePass({ label: 'center-apply', timestampWrites: this.profiler?.timestampWrites('center') });
       applyPass.setPipeline(this.centerApplyPipeline);
-      applyPass.setBindGroup(0, bg);
+      applyPass.setBindGroup(0, this.centerBindGroup);
       applyPass.dispatchWorkgroups(workgroups);
       applyPass.end();
     }
 
     // --- 8. Velocity Verlet integration ---
+    this.integrateParamsF32[0] = params.velocityDecay;
+    this.integrateParamsF32[1] = params.energy;
+    this.integrateParamsU32[2] = this.nodeCount;
+    this.integrateParamsU32[3] = 0;
+    this.device.queue.writeBuffer(this.bufferManager.getBuffer('integrate-params'), 0, this.integrateParams);
+
     {
-      const paramsData = new ArrayBuffer(16);
-      const f32 = new Float32Array(paramsData);
-      const u32 = new Uint32Array(paramsData);
-      f32[0] = params.velocityDecay;
-      f32[1] = params.energy;
-      u32[2] = this.nodeCount;
-      u32[3] = 0;
-
-      this.device.queue.writeBuffer(this.bufferManager.getBuffer('integrate-params'), 0, paramsData);
-
-      const bg = this.device.createBindGroup({
-        layout: this.integrateBGL,
-        entries: [
-          { binding: 0, resource: { buffer: this.bufferManager.getBuffer('node-positions') } },
-          { binding: 1, resource: { buffer: this.bufferManager.getBuffer('attraction-forces') } },
-          { binding: 2, resource: { buffer: this.bufferManager.getBuffer('integrate-params') } },
-        ],
-      });
-
-      const pass = encoder.beginComputePass({ label: 'integrate' });
+      const pass = encoder.beginComputePass({ label: 'integrate', timestampWrites: this.profiler?.timestampWrites('integrate') });
       pass.setPipeline(this.integratePipeline);
-      pass.setBindGroup(0, bg);
+      pass.setBindGroup(0, this.integrateBindGroup);
       pass.dispatchWorkgroups(workgroups);
       pass.end();
     }
 
+    // Resolve profiler timestamps before finishing
+    this.profiler?.resolve(encoder);
+
     // Submit all compute work
     this.device.queue.submit([encoder.finish()]);
+
+    // Kick off async readback (non-blocking)
+    this.profiler?.readback();
   }
 
   /**

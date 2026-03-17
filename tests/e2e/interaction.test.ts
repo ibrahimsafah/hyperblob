@@ -7,7 +7,7 @@ test.describe('Interaction', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -17,7 +17,7 @@ test.describe('Interaction', () => {
   test('mouse wheel zoom changes zoom level', async ({ page }) => {
     const zoomBefore = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getCamera().zoom;
+      return app.engine.getCamera().zoom;
     });
 
     // Perform wheel zoom on the canvas
@@ -31,7 +31,7 @@ test.describe('Interaction', () => {
 
     const zoomAfter = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getCamera().zoom;
+      return app.engine.getCamera().zoom;
     });
 
     expect(zoomAfter).not.toBe(zoomBefore);
@@ -40,7 +40,7 @@ test.describe('Interaction', () => {
   test('drag pan moves camera center', async ({ page }) => {
     const centerBefore = await page.evaluate(() => {
       const app = (window as any).__app;
-      const camera = app.getCamera();
+      const camera = app.engine.getCamera();
       return { x: camera.center[0], y: camera.center[1] };
     });
 
@@ -60,7 +60,7 @@ test.describe('Interaction', () => {
 
     const centerAfter = await page.evaluate(() => {
       const app = (window as any).__app;
-      const camera = app.getCamera();
+      const camera = app.engine.getCamera();
       return { x: camera.center[0], y: camera.center[1] };
     });
 
@@ -82,7 +82,7 @@ test.describe('Interaction', () => {
     const worldBefore = await page.evaluate(
       ({ sx, sy, bx, by }) => {
         const app = (window as any).__app;
-        const camera = app.getCamera();
+        const camera = app.engine.getCamera();
         const canvasX = (sx - bx) * window.devicePixelRatio;
         const canvasY = (sy - by) * window.devicePixelRatio;
         return camera.screenToWorld(canvasX, canvasY);
@@ -98,7 +98,7 @@ test.describe('Interaction', () => {
     const worldAfter = await page.evaluate(
       ({ sx, sy, bx, by }) => {
         const app = (window as any).__app;
-        const camera = app.getCamera();
+        const camera = app.engine.getCamera();
         const canvasX = (sx - bx) * window.devicePixelRatio;
         const canvasY = (sy - by) * window.devicePixelRatio;
         return camera.screenToWorld(canvasX, canvasY);

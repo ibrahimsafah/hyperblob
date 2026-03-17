@@ -6,14 +6,14 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const hullAlpha = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams().hullAlpha;
+      return app.engine.renderParams.hullAlpha;
     });
 
     // Default hullAlpha should be > 0
@@ -25,7 +25,7 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -46,14 +46,14 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const hullMargin = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams().hullMargin;
+      return app.engine.renderParams.hullMargin;
     });
 
     // Default hull margin should be 3
@@ -65,14 +65,14 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
 
     const hullOutline = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getRenderParams().hullOutline;
+      return app.engine.renderParams.hullOutline;
     });
 
     expect(hullOutline).toBe(false);
@@ -88,7 +88,7 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );
@@ -107,7 +107,7 @@ test.describe('Convex Hulls', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getNodeCount() > 0;
+        return app?.engine?.getNodeCount() > 0;
       },
       { timeout: 15000 }
     );

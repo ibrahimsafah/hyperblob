@@ -71,14 +71,14 @@ test.describe('Data Loading', () => {
     await page.waitForFunction(
       () => {
         const app = (window as any).__app;
-        return app && app.getGraphData && app.getGraphData();
+        return app?.engine?.getGraphData();
       },
       { timeout: 15000 }
     );
 
     const nodeCount = await page.evaluate(() => {
       const app = (window as any).__app;
-      return app.getNodeCount();
+      return app.engine.getNodeCount();
     });
     expect(nodeCount).toBe(101);
   });

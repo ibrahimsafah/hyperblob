@@ -16,8 +16,7 @@ This tool renders each hyperedge as a colored region that envelops its member no
 
 - **GPU Barnes-Hut force layout** — O(n log n) force simulation running entirely in WebGPU compute shaders (Morton codes, radix sort, quadtree, tree traversal — 8 passes per frame)
 - **Two hull modes** — convex hulls (fast, angular) or metaball blobs (smooth, concave shapes that pinch between distant nodes)
-- **GPU metaball field** — Gaussian scalar fields evaluated on a 64x64 grid per hyperedge in a single compute dispatch, with CPU marching squares + Chaikin smoothing for contour extraction
-- **WASM-accelerated contours** — marching squares and bridge field computation optionally run in a hand-written 2KB WebAssembly module with automatic JS fallback
+- **Screen-space metaballs** — per-pixel Gaussian field evaluation + MST bridge capsule SDFs in a single fragment shader dispatch, no CPU readback
 - **HIF format** — loads [Hypergraph Interchange Format](https://github.com/HIF-org/HIF-standard) JSON files, or generate synthetic datasets up to 1M+ nodes
 - **Interactive** — pan, zoom, drag nodes, and tune all parameters in real time via a tabbed control panel
 - **120 fps** on the bundled Game of Thrones dataset (101 nodes, 394 hyperedges)
@@ -49,13 +48,12 @@ Open [localhost:5173](http://localhost:5173). The Game of Thrones dataset loads 
 
 ```bash
 npm run build          # TypeScript check + Vite production build
-npm run build:wasm     # Recompile WASM module (requires wabt)
 ```
 
 ### Test
 
 ```bash
-npm run test:unit      # 178 Vitest unit tests
+npm run test:unit      # Vitest unit tests
 npm run test:e2e       # Playwright E2E tests (requires Brave)
 ```
 
@@ -84,17 +82,17 @@ Each frame dispatches 8 WebGPU compute passes:
 
 ### Metaball pipeline
 
-Runs every 10 frames with double-buffered GPU readback (dispatch frame N while processing frame N-1):
+Screen-space fragment shader — no CPU readback:
 
 ```
-GPU:  Gaussian field evaluation on 64x64 grid per hyperedge
-        ↓ async readback
-CPU:  marching squares → contour stitching → Chaikin smoothing → fan triangulation
+CPU:  compute MST bridge edges per hyperedge (Prim's algorithm)
         ↓
-GPU:  render as alpha-blended triangles
+GPU:  instanced bounding-box quads → per-pixel Gaussian field + MST capsule SDF
+        ↓
+GPU:  smoothstep threshold → alpha-blended output
 ```
 
-The GPU evaluates `f(x,y) = sum( exp(-d^2 / 2*sigma^2) )` across all member nodes. The CPU extracts iso-contours and triangulates them. An MST bridge field keeps blobs connected when nodes are spread apart.
+Each fragment evaluates `f(x,y) = sum( exp(-d^2 / 2σ²) )` across member nodes plus capsule SDFs along MST edges, all in a single fragment shader pass.
 
 ### Rendering
 
@@ -114,16 +112,14 @@ src/
 ├── layout/                     # Force simulation, quadtree, radix sort
 ├── render/                     # Camera, renderers, hull computation
 │   ├── hull-compute.ts         # Convex hulls (Andrew's monotone chain)
-│   ├── metaball-compute.ts     # GPU metaball orchestrator
-│   └── metaball-hull.ts        # Marching squares, contour stitching, triangulation
+│   └── metaball-hull.ts        # MST computation and segment distance (for metaball-renderer)
 ├── interaction/                # Mouse/touch input, node picking, LOD
 ├── ui/                         # Tabbed control panel
-├── shaders/                    # 13 WGSL compute + render shaders
-├── wasm/                       # Hand-written WAT module (2KB compiled)
+├── shaders/                    # WGSL compute + render shaders
 └── utils/                      # Math, colors, FPS counter
 
 tests/
-├── unit/                       # 178 Vitest tests
+├── unit/                       # Vitest tests
 └── e2e/                        # Playwright + Brave
 ```
 
@@ -131,7 +127,6 @@ tests/
 
 - **TypeScript** — strict mode, zero `any`
 - **WebGPU** — compute + render pipelines (no Canvas2D, no SVG, no WebGL)
-- **WebAssembly** — optional 2KB hand-written WAT for contour extraction
 - **Vite** — dev server + bundler
 - **Vitest** + **Playwright** — unit + E2E tests
 - **Zero runtime dependencies**

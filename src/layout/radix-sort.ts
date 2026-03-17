@@ -1,5 +1,7 @@
 import type { BufferManager } from '../gpu/buffer-manager';
+import type { GPUProfiler } from '../gpu/gpu-profiler';
 import radixSortShader from '../shaders/radix-sort.wgsl?raw';
+import radixSortSubgroupShader from '../shaders/radix-sort-subgroup.wgsl?raw';
 
 /**
  * GPU Radix Sort for 32-bit unsigned integer keys with associated values.
@@ -17,6 +19,8 @@ export class RadixSort {
   private bindGroupLayout: GPUBindGroupLayout;
 
   private maxNodeCount: number;
+  private profiler: GPUProfiler | null = null;
+  private _hasSubgroups: boolean;
 
   // Pre-allocated to avoid per-frame GC pressure
   private paramsArray = new Uint32Array(4);
@@ -25,14 +29,19 @@ export class RadixSort {
   private evenBindGroup: GPUBindGroup | null = null;
   private oddBindGroup: GPUBindGroup | null = null;
 
-  constructor(device: GPUDevice, bufferManager: BufferManager, maxNodeCount: number) {
+  get hasSubgroups(): boolean { return this._hasSubgroups; }
+
+  constructor(device: GPUDevice, bufferManager: BufferManager, maxNodeCount: number, profiler?: GPUProfiler, features: ReadonlySet<string> = new Set()) {
     this.device = device;
     this.bufferManager = bufferManager;
     this.maxNodeCount = maxNodeCount;
+    this.profiler = profiler ?? null;
+    this._hasSubgroups = features.has('subgroups');
 
+    const shaderCode = this._hasSubgroups ? radixSortSubgroupShader : radixSortShader;
     const shaderModule = device.createShaderModule({
-      label: 'radix-sort-shader',
-      code: radixSortShader,
+      label: this._hasSubgroups ? 'radix-sort-subgroup-shader' : 'radix-sort-shader',
+      code: shaderCode,
     });
 
     this.bindGroupLayout = device.createBindGroupLayout({
@@ -171,21 +180,21 @@ export class RadixSort {
       const bindGroup = pass % 2 === 0 ? this.evenBindGroup! : this.oddBindGroup!;
 
       // Pass 1: Histogram
-      const histPass = encoder.beginComputePass({ label: `radix-histogram-${pass}` });
+      const histPass = encoder.beginComputePass({ label: `radix-histogram-${pass}`, timestampWrites: this.profiler?.timestampWrites('sort') });
       histPass.setPipeline(this.histogramPipeline);
       histPass.setBindGroup(0, bindGroup);
       histPass.dispatchWorkgroups(numWorkgroups);
       histPass.end();
 
       // Pass 2: Prefix sum (1 workgroup of 256 threads, one per bin)
-      const prefixPass = encoder.beginComputePass({ label: `radix-prefix-${pass}` });
+      const prefixPass = encoder.beginComputePass({ label: `radix-prefix-${pass}`, timestampWrites: this.profiler?.timestampWrites('sort') });
       prefixPass.setPipeline(this.prefixSumPipeline);
       prefixPass.setBindGroup(0, bindGroup);
       prefixPass.dispatchWorkgroups(1);
       prefixPass.end();
 
       // Pass 3: Scatter
-      const scatterPass = encoder.beginComputePass({ label: `radix-scatter-${pass}` });
+      const scatterPass = encoder.beginComputePass({ label: `radix-scatter-${pass}`, timestampWrites: this.profiler?.timestampWrites('sort') });
       scatterPass.setPipeline(this.scatterPipeline);
       scatterPass.setBindGroup(0, bindGroup);
       scatterPass.dispatchWorkgroups(numWorkgroups);

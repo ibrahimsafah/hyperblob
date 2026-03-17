@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig(({ mode }) => ({
-  assetsInclude: ['**/*.wgsl', '**/*.wasm'],
+  assetsInclude: ['**/*.wgsl'],
   build: mode === 'lib' ? {
     lib: {
       entry: 'src/lib.ts',
