@@ -1,0 +1,772 @@
+// HyperblobEngine — reusable WebGPU hypergraph visualization library
+// Extracted from App: contains all GPU, simulation, rendering, and interaction logic.
+// Demo-specific concerns (Panel, Stats, dataset loading) stay in App.
+import { initWebGPU } from './gpu/device';
+import { BufferManager } from './gpu/buffer-manager';
+import { GPUProfiler } from './gpu/gpu-profiler';
+import { Camera } from './render/camera';
+import { getPaletteColors } from './utils/color';
+import { Tooltip } from './ui/tooltip';
+import { defaultSimulationParams, defaultRenderParams, } from './data/types';
+import nodeShaderCode from './shaders/node-render.wgsl?raw';
+// Static imports for all engine-required modules (bundled into library)
+import { ForceSimulation } from './layout/force-simulation';
+import { InputHandler } from './interaction/input-handler';
+import { EdgeRenderer } from './render/edge-renderer';
+import { HullRenderer } from './render/hull-renderer';
+import { BoundaryRenderer } from './render/boundary-renderer';
+export class HyperblobEngine {
+    gpu;
+    buffers;
+    camera;
+    options;
+    simParams;
+    renderParams;
+    graphData = null;
+    nodeCount = 0;
+    // Selection state (neighborhood filter — default click behavior)
+    selectedNode = null;
+    visibleNodes = null;
+    // Highlight state (library API — dim-based, not hide-based)
+    highlightedNodes = null;
+    // Node filter state (search)
+    nodeFilterPredicate = null;
+    // Node drag state
+    cpuPositions = null;
+    cpuPositionsPending = false;
+    positionCacheCounter = 0;
+    draggedNodeIndex = null;
+    dragTargetPos = null;
+    dragSmoothPos = null;
+    dragPrevPos = null;
+    // Render pipeline state
+    nodeRenderPipeline = null;
+    nodeBindGroup = null;
+    cameraBuffer = null;
+    paramsBuffer = null;
+    paletteBuffer = null;
+    // Pre-allocated typed arrays for per-frame GPU uploads (avoid GC pressure)
+    dragUploadArray = new Float32Array(4);
+    renderParamsArray = new Float32Array(4);
+    lastCameraVersion = -1;
+    // Sub-module instances (statically imported, instantiated on setData)
+    inputHandlerInstance = null;
+    edgeRendererInstance = null;
+    hullRendererInstance = null;
+    boundaryRendererInstance = null;
+    simulation = null;
+    tooltip = null;
+    lastHoveredNode = null;
+    lastHoveredEdge = null;
+    profiler;
+    running = false;
+    disposed = false;
+    // ── Static factory (hides async GPU init) ──
+    static async create(canvas, options) {
+        const gpu = await initWebGPU(canvas);
+        const engine = new HyperblobEngine(gpu, options ?? {});
+        await engine.init();
+        return engine;
+    }
+    constructor(gpu, options) {
+        this.gpu = gpu;
+        this.buffers = new BufferManager(gpu.device);
+        this.camera = new Camera();
+        this.options = options;
+        this.profiler = new GPUProfiler(gpu.device, gpu.supportsTimestampQuery);
+        this.simParams = { ...defaultSimulationParams(), ...options.simParams };
+        this.renderParams = { ...defaultRenderParams(), ...options.renderParams };
+        if (options.tooltip !== false) {
+            this.tooltip = new Tooltip(gpu.canvas.parentElement);
+        }
+    }
+    async init() {
+        this.handleResize();
+        window.addEventListener('resize', () => this.handleResize());
+        // Setup palette buffer (custom or default)
+        const paletteData = this.options.palette ?? getPaletteColors();
+        this.paletteBuffer = this.buffers.createBuffer('palette', paletteData.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'palette');
+        this.buffers.uploadData('palette', paletteData);
+        // Camera & render params uniform buffers
+        this.cameraBuffer = this.buffers.createBuffer('camera-uniform', 64, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'camera-uniform');
+        this.paramsBuffer = this.buffers.createBuffer('render-params', 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, 'render-params');
+        this.createNodePipeline();
+        this.setupInputHandler();
+    }
+    setupInputHandler() {
+        const opts = this.options;
+        this.inputHandlerInstance = new InputHandler(this.gpu.canvas, this.camera, {
+            hitTest: (wx, wy) => this.hitTestNode(wx, wy),
+            onDragStart: (nodeIndex) => {
+                this.draggedNodeIndex = nodeIndex;
+                if (this.cpuPositions) {
+                    const x = this.cpuPositions[nodeIndex * 4];
+                    const y = this.cpuPositions[nodeIndex * 4 + 1];
+                    this.dragSmoothPos = [x, y];
+                    this.dragTargetPos = [x, y];
+                    this.dragPrevPos = [x, y];
+                }
+                if (this.simParams.energy < 0.08) {
+                    this.simParams.energy = 0.08;
+                }
+                this.simParams.running = true;
+            },
+            onDrag: (_nodeIndex, wx, wy) => {
+                this.dragTargetPos = [wx, wy];
+                if (this.cpuPositions && this.draggedNodeIndex !== null) {
+                    this.cpuPositions[this.draggedNodeIndex * 4] = wx;
+                    this.cpuPositions[this.draggedNodeIndex * 4 + 1] = wy;
+                }
+            },
+            onDragEnd: () => {
+                if (this.draggedNodeIndex !== null && this.dragSmoothPos && this.dragPrevPos && this.buffers.hasBuffer('node-positions')) {
+                    const vx = (this.dragSmoothPos[0] - this.dragPrevPos[0]) * 4;
+                    const vy = (this.dragSmoothPos[1] - this.dragPrevPos[1]) * 4;
+                    const data = new Float32Array([this.dragSmoothPos[0], this.dragSmoothPos[1], vx, vy]);
+                    this.buffers.uploadData('node-positions', data, this.draggedNodeIndex * 16);
+                }
+                this.draggedNodeIndex = null;
+                this.dragTargetPos = null;
+                this.dragSmoothPos = null;
+                this.dragPrevPos = null;
+            },
+            onClick: (nodeIndex) => {
+                if (opts.onNodeClick && nodeIndex !== null && this.graphData) {
+                    // Custom callback — let consumer handle selection
+                    opts.onNodeClick(nodeIndex, this.graphData.nodes[nodeIndex]);
+                }
+                else if (opts.onEdgeClick && nodeIndex === null) {
+                    // Click on empty space — consumer might want to clear
+                    // (no action needed — consumer handles via onNodeClick(null))
+                }
+                else {
+                    // Default behavior: neighborhood selection toggle
+                    if (nodeIndex === null || nodeIndex === this.selectedNode) {
+                        this.selectedNode = null;
+                    }
+                    else {
+                        this.selectedNode = nodeIndex;
+                    }
+                    this.applySelection();
+                }
+                // Also fire the callback if defined, even for null clicks
+                if (opts.onNodeClick && nodeIndex === null) {
+                    // Signal "click empty space" by not calling — consumer can detect via clearHighlight or separate mechanism
+                }
+            },
+            onHoverNode: (nodeIndex, screenX, screenY) => {
+                if (nodeIndex === this.lastHoveredNode)
+                    return;
+                this.lastHoveredNode = nodeIndex;
+                // Fire custom callback if provided
+                if (opts.onNodeHover && this.graphData) {
+                    const node = nodeIndex !== null ? this.graphData.nodes[nodeIndex] : null;
+                    opts.onNodeHover(nodeIndex, node, screenX, screenY);
+                }
+                // Built-in tooltip
+                if (this.tooltip) {
+                    if (nodeIndex === null || !this.graphData) {
+                        if (this.lastHoveredEdge === null)
+                            this.tooltip.hide();
+                        return;
+                    }
+                    const node = this.graphData.nodes[nodeIndex];
+                    const edgeLabels = this.graphData.hyperedges
+                        .filter(he => he.memberIndices.includes(nodeIndex))
+                        .map(he => String(he.attrs?.name ?? he.attrs?.label ?? `Edge ${he.id}`));
+                    const nodeLabel = String(node?.attrs?.name ?? node?.attrs?.label ?? node?.id ?? `#${nodeIndex}`);
+                    this.tooltip.showNode(screenX, screenY, nodeLabel, edgeLabels);
+                }
+            },
+            hitTestEdge: (wx, wy) => this.hitTestEdge(wx, wy),
+            onHoverEdge: (edgeIndex, screenX, screenY) => {
+                if (edgeIndex === this.lastHoveredEdge)
+                    return;
+                this.lastHoveredEdge = edgeIndex;
+                // Fire custom callback if provided
+                if (opts.onEdgeHover && this.graphData) {
+                    const edge = edgeIndex !== null ? this.graphData.hyperedges[edgeIndex] : null;
+                    opts.onEdgeHover(edgeIndex, edge, screenX, screenY);
+                }
+                // Built-in tooltip
+                if (this.tooltip) {
+                    if (edgeIndex === null || !this.graphData) {
+                        if (this.lastHoveredNode === null)
+                            this.tooltip.hide();
+                        return;
+                    }
+                    const he = this.graphData.hyperedges[edgeIndex];
+                    if (!he) {
+                        this.tooltip.hide();
+                        return;
+                    }
+                    const label = String(he.attrs?.name ?? he.attrs?.label ?? `Edge ${he.id}`);
+                    const members = he.memberIndices.map(i => this.graphData.nodes[i]?.id ?? `#${i}`);
+                    this.tooltip.show(screenX, screenY, label, members);
+                }
+            },
+        });
+    }
+    createNodePipeline() {
+        const { device, format } = this.gpu;
+        const shaderModule = device.createShaderModule({
+            label: 'node-render-shader',
+            code: nodeShaderCode,
+        });
+        const bindGroupLayout = device.createBindGroupLayout({
+            label: 'node-render-bind-group-layout',
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+                { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+                { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+                { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+            ],
+        });
+        const pipelineLayout = device.createPipelineLayout({
+            label: 'node-render-pipeline-layout',
+            bindGroupLayouts: [bindGroupLayout],
+        });
+        this.nodeRenderPipeline = device.createRenderPipeline({
+            label: 'node-render-pipeline',
+            layout: pipelineLayout,
+            vertex: { module: shaderModule, entryPoint: 'vs_main' },
+            fragment: {
+                module: shaderModule,
+                entryPoint: 'fs_main',
+                targets: [{
+                        format,
+                        blend: {
+                            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                        },
+                    }],
+            },
+            primitive: { topology: 'triangle-list' },
+        });
+    }
+    createNodeBindGroup() {
+        if (!this.nodeRenderPipeline || !this.cameraBuffer || !this.paramsBuffer || !this.paletteBuffer)
+            return;
+        if (!this.buffers.hasBuffer('node-positions') || !this.buffers.hasBuffer('node-metadata'))
+            return;
+        this.nodeBindGroup = this.gpu.device.createBindGroup({
+            label: 'node-render-bind-group',
+            layout: this.nodeRenderPipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: this.cameraBuffer } },
+                { binding: 1, resource: { buffer: this.buffers.getBuffer('node-positions') } },
+                { binding: 2, resource: { buffer: this.buffers.getBuffer('node-metadata') } },
+                { binding: 3, resource: { buffer: this.paramsBuffer } },
+                { binding: 4, resource: { buffer: this.paletteBuffer } },
+            ],
+        });
+    }
+    // ── Public API ──
+    setData(data) {
+        this.graphData = data;
+        this.nodeCount = data.nodes.length;
+        this.selectedNode = null;
+        this.visibleNodes = null;
+        this.highlightedNodes = null;
+        // dimmed state is tracked by edge/hull renderers
+        // Upload positions: [x, y, vx, vy] per node — random initial positions
+        const positions = new Float32Array(data.nodes.length * 4);
+        const spread = Math.sqrt(data.nodes.length) * 10;
+        for (let i = 0; i < data.nodes.length; i++) {
+            positions[i * 4 + 0] = (Math.random() - 0.5) * spread;
+            positions[i * 4 + 1] = (Math.random() - 0.5) * spread;
+            positions[i * 4 + 2] = 0;
+            positions[i * 4 + 3] = 0;
+        }
+        this.buffers.createBuffer('node-positions', positions.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, 'node-positions');
+        this.buffers.uploadData('node-positions', positions);
+        this.cpuPositions = new Float32Array(positions);
+        // Upload metadata: [group, flags] per node
+        const metadata = new Uint32Array(data.nodes.length * 2);
+        for (let i = 0; i < data.nodes.length; i++) {
+            metadata[i * 2 + 0] = data.nodes[i].group;
+            metadata[i * 2 + 1] = 0;
+        }
+        this.buffers.createBuffer('node-metadata', metadata.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'node-metadata');
+        this.buffers.uploadData('node-metadata', metadata);
+        this.uploadHyperedgeBuffers(data);
+        this.createNodeBindGroup();
+        // Setup edge renderer
+        if (!this.edgeRendererInstance) {
+            this.edgeRendererInstance = new EdgeRenderer(this.gpu, this.buffers, this.camera);
+        }
+        this.edgeRendererInstance.setData(data);
+        // Setup hull renderer
+        if (!this.hullRendererInstance) {
+            this.hullRendererInstance = new HullRenderer(this.gpu, this.buffers, this.camera);
+        }
+        this.hullRendererInstance.setData(data);
+        // Setup boundary renderer
+        if (!this.boundaryRendererInstance) {
+            this.boundaryRendererInstance = new BoundaryRenderer(this.gpu, this.camera);
+        }
+        // Setup force simulation
+        this.simulation = new ForceSimulation(this.gpu.device, this.buffers, data, this.simParams, this.profiler, this.gpu.features);
+        this.simParams.energy = 1.0;
+        this.simParams.running = true;
+        this.camera.fitBounds(-spread / 2, -spread / 2, spread / 2, spread / 2);
+    }
+    start() {
+        if (this.running)
+            return;
+        this.running = true;
+        this.tick();
+    }
+    dispose() {
+        this.disposed = true;
+        this.running = false;
+        this.inputHandlerInstance?.dispose();
+        this.profiler.destroy();
+        this.buffers.destroyAll();
+    }
+    getCamera() { return this.camera; }
+    getNodeCount() { return this.nodeCount; }
+    getGraphData() { return this.graphData; }
+    getBufferManager() { return this.buffers; }
+    getGPU() { return this.gpu; }
+    getGPUTimings() { return this.profiler.getLatestTimings(); }
+    handleResize() {
+        const canvas = this.gpu.canvas;
+        const container = canvas.parentElement;
+        if (!container)
+            return;
+        const dpr = window.devicePixelRatio || 1;
+        const width = Math.max(container.clientWidth, 1);
+        const height = Math.max(container.clientHeight, 1);
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        // Reconfigure after dimension change — Chrome/Dawn (IOSurface backend)
+        // can produce "texture view associated with [Device]" errors if the
+        // context is not reconfigured after the canvas buffer changes.
+        this.gpu.context.configure({
+            device: this.gpu.device,
+            format: this.gpu.format,
+            alphaMode: 'premultiplied',
+        });
+        this.camera.resize(width * dpr, height * dpr);
+    }
+    // ── Highlight API (dim-based: non-highlighted → 12% alpha) ──
+    highlightNodes(indices) {
+        if (!this.graphData || !this.buffers.hasBuffer('node-metadata'))
+            return;
+        const highlightSet = new Set(indices);
+        this.highlightedNodes = highlightSet;
+        // Find edges containing any highlighted node
+        const activeEdges = new Set();
+        const dimmedEdges = new Set();
+        for (const he of this.graphData.hyperedges) {
+            const hasHighlighted = he.memberIndices.some(idx => highlightSet.has(idx));
+            if (hasHighlighted) {
+                activeEdges.add(he.index);
+            }
+            else {
+                dimmedEdges.add(he.index);
+            }
+        }
+        // dimmedEdges state is tracked by edge/hull renderers below
+        // Update node metadata: bit 1 = dimmed
+        const metadata = new Uint32Array(this.nodeCount * 2);
+        for (let i = 0; i < this.nodeCount; i++) {
+            metadata[i * 2] = this.graphData.nodes[i].group;
+            // Preserve bit 0 (hidden from filter), set/clear bit 1 (dimmed)
+            let flags = 0;
+            if (this.nodeFilterPredicate && !this.nodeFilterPredicate(this.graphData.nodes[i], i)) {
+                flags |= 1; // hidden
+            }
+            if (!highlightSet.has(i)) {
+                flags |= 2; // dimmed
+            }
+            metadata[i * 2 + 1] = flags;
+        }
+        this.buffers.uploadData('node-metadata', metadata);
+        // Dim edges via edge renderer
+        if (this.edgeRendererInstance?.setDimmedEdges) {
+            this.edgeRendererInstance.setDimmedEdges(dimmedEdges);
+        }
+        // Dim hulls via hull renderer
+        if (this.hullRendererInstance?.setDimmedEdges) {
+            this.hullRendererInstance.setDimmedEdges(dimmedEdges);
+        }
+    }
+    highlightEdge(edgeIndex) {
+        if (!this.graphData)
+            return;
+        const he = this.graphData.hyperedges[edgeIndex];
+        if (!he)
+            return;
+        this.highlightNodes(he.memberIndices);
+    }
+    clearHighlight() {
+        if (!this.graphData || !this.buffers.hasBuffer('node-metadata'))
+            return;
+        this.highlightedNodes = null;
+        // dimmed state is tracked by edge/hull renderers
+        // Reset all metadata flags (preserving filter state)
+        const metadata = new Uint32Array(this.nodeCount * 2);
+        for (let i = 0; i < this.nodeCount; i++) {
+            metadata[i * 2] = this.graphData.nodes[i].group;
+            let flags = 0;
+            if (this.nodeFilterPredicate && !this.nodeFilterPredicate(this.graphData.nodes[i], i)) {
+                flags |= 1; // hidden
+            }
+            metadata[i * 2 + 1] = flags;
+        }
+        this.buffers.uploadData('node-metadata', metadata);
+        if (this.edgeRendererInstance?.setDimmedEdges) {
+            this.edgeRendererInstance.setDimmedEdges(null);
+        }
+        if (this.hullRendererInstance?.setDimmedEdges) {
+            this.hullRendererInstance.setDimmedEdges(null);
+        }
+    }
+    // ── Search/Filter API ──
+    setNodeFilter(predicate) {
+        if (!this.graphData || !this.buffers.hasBuffer('node-metadata'))
+            return;
+        this.nodeFilterPredicate = predicate;
+        if (predicate === null) {
+            // Clear filter — show all
+            this.visibleNodes = null;
+            const metadata = new Uint32Array(this.nodeCount * 2);
+            for (let i = 0; i < this.nodeCount; i++) {
+                metadata[i * 2] = this.graphData.nodes[i].group;
+                let flags = 0;
+                if (this.highlightedNodes && !this.highlightedNodes.has(i)) {
+                    flags |= 2; // dimmed
+                }
+                metadata[i * 2 + 1] = flags;
+            }
+            this.buffers.uploadData('node-metadata', metadata);
+            if (this.edgeRendererInstance) {
+                this.edgeRendererInstance.setVisibleEdges(this.graphData, null);
+            }
+            if (this.hullRendererInstance) {
+                this.hullRendererInstance.setVisibleEdges(null);
+            }
+        }
+        else {
+            // Apply filter
+            const visibleNodes = new Set();
+            for (let i = 0; i < this.nodeCount; i++) {
+                if (predicate(this.graphData.nodes[i], i)) {
+                    visibleNodes.add(i);
+                }
+            }
+            this.visibleNodes = visibleNodes;
+            // Determine visible edges (at least one member visible)
+            const visibleEdges = new Set();
+            for (const he of this.graphData.hyperedges) {
+                if (he.memberIndices.some(idx => visibleNodes.has(idx))) {
+                    visibleEdges.add(he.index);
+                }
+            }
+            const metadata = new Uint32Array(this.nodeCount * 2);
+            for (let i = 0; i < this.nodeCount; i++) {
+                metadata[i * 2] = this.graphData.nodes[i].group;
+                let flags = 0;
+                if (!visibleNodes.has(i))
+                    flags |= 1; // hidden
+                if (this.highlightedNodes && !this.highlightedNodes.has(i))
+                    flags |= 2; // dimmed
+                metadata[i * 2 + 1] = flags;
+            }
+            this.buffers.uploadData('node-metadata', metadata);
+            if (this.edgeRendererInstance) {
+                this.edgeRendererInstance.setVisibleEdges(this.graphData, visibleEdges);
+            }
+            if (this.hullRendererInstance) {
+                this.hullRendererInstance.setVisibleEdges(visibleEdges);
+            }
+        }
+    }
+    // ── Palette API ──
+    setPalette(palette) {
+        if (this.paletteBuffer) {
+            this.buffers.uploadData('palette', palette);
+        }
+    }
+    // ── Simulation control ──
+    /**
+     * Run the simulation to convergence without rendering.
+     * Submits ~N GPU ticks in a tight loop, waits for completion,
+     * then updates CPU positions and fits the camera.
+     */
+    async converge() {
+        if (!this.simulation || !this.graphData)
+            return;
+        // Calculate iterations: solve for n where energy ≈ idleEnergy
+        // energy_n = (energy_0 - idle) * (1 - rate)^n + idle
+        const { energy, idleEnergy, coolingRate, stopThreshold } = this.simParams;
+        const delta = energy - idleEnergy;
+        const target = Math.max(stopThreshold, idleEnergy * 0.05);
+        let iterations;
+        if (delta <= target || coolingRate <= 0) {
+            iterations = 50;
+        }
+        else {
+            iterations = Math.ceil(Math.log(target / delta) / Math.log(1 - coolingRate));
+        }
+        iterations = Math.min(Math.max(iterations, 50), 1000);
+        // Pause normal render-loop simulation during convergence
+        const wasRunning = this.simParams.running;
+        this.simParams.running = false;
+        // Run simulation ticks — GPU queue serializes them
+        for (let i = 0; i < iterations; i++) {
+            this.simulation.tick(this.simParams);
+            this.simParams.energy += (this.simParams.idleEnergy - this.simParams.energy) * this.simParams.coolingRate;
+        }
+        // Wait for all GPU work to finish
+        await this.gpu.device.queue.onSubmittedWorkDone();
+        // Read back final positions
+        if (this.buffers.hasBuffer('node-positions')) {
+            this.cpuPositions = await this.buffers.readBuffer('node-positions', this.nodeCount * 16);
+        }
+        // Trigger hull + boundary recompute with fresh positions
+        if (this.hullRendererInstance) {
+            this.hullRendererInstance.forceRecompute();
+        }
+        if (this.cpuPositions) {
+            this.boundaryRendererInstance?.updateFromPositions(this.cpuPositions, this.nodeCount, this.renderParams.nodeBaseSize);
+        }
+        // Fit camera to converged layout
+        await this.fitToScreen();
+        // Restore simulation state (energy is now at idle)
+        this.simParams.running = wasRunning;
+    }
+    resetSimulation() {
+        if (!this.graphData)
+            return;
+        this.simParams.energy = 1.0;
+        this.simParams.running = true;
+        const spread = Math.sqrt(this.graphData.nodes.length) * 10;
+        const positions = new Float32Array(this.graphData.nodes.length * 4);
+        for (let i = 0; i < this.graphData.nodes.length; i++) {
+            positions[i * 4 + 0] = (Math.random() - 0.5) * spread;
+            positions[i * 4 + 1] = (Math.random() - 0.5) * spread;
+        }
+        this.buffers.uploadData('node-positions', positions);
+        this.cpuPositions = new Float32Array(positions);
+    }
+    async fitToScreen() {
+        if (!this.graphData || this.nodeCount === 0)
+            return;
+        const posData = await this.buffers.readBuffer('node-positions', this.nodeCount * 16);
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let i = 0; i < this.nodeCount; i++) {
+            const x = posData[i * 4];
+            const y = posData[i * 4 + 1];
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+        }
+        this.camera.fitBounds(minX, minY, maxX, maxY);
+    }
+    // ── Internal: per-frame loop ──
+    tick = () => {
+        if (this.disposed || !this.running)
+            return;
+        if (this.draggedNodeIndex !== null && this.simParams.energy < 0.08) {
+            this.simParams.energy = 0.08;
+            this.simParams.running = true;
+        }
+        if (this.draggedNodeIndex !== null && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
+            this.dragUploadArray[0] = this.dragSmoothPos[0];
+            this.dragUploadArray[1] = this.dragSmoothPos[1];
+            this.dragUploadArray[2] = 0;
+            this.dragUploadArray[3] = 0;
+            this.buffers.uploadData('node-positions', this.dragUploadArray, this.draggedNodeIndex * 16);
+        }
+        if (this.simulation && this.simParams.running && this.simParams.energy > this.simParams.stopThreshold) {
+            this.simulation.tick(this.simParams);
+            this.simParams.energy += (this.simParams.idleEnergy - this.simParams.energy) * this.simParams.coolingRate;
+        }
+        if (this.draggedNodeIndex !== null && this.dragTargetPos && this.dragSmoothPos && this.buffers.hasBuffer('node-positions')) {
+            this.dragPrevPos = [this.dragSmoothPos[0], this.dragSmoothPos[1]];
+            const t = 0.55;
+            this.dragSmoothPos[0] += (this.dragTargetPos[0] - this.dragSmoothPos[0]) * t;
+            this.dragSmoothPos[1] += (this.dragTargetPos[1] - this.dragSmoothPos[1]) * t;
+            this.dragUploadArray[0] = this.dragSmoothPos[0];
+            this.dragUploadArray[1] = this.dragSmoothPos[1];
+            this.buffers.uploadData('node-positions', this.dragUploadArray, this.draggedNodeIndex * 16);
+        }
+        this.positionCacheCounter++;
+        if (this.positionCacheCounter >= 10 && this.nodeCount > 0 && !this.cpuPositionsPending && this.buffers.hasBuffer('node-positions')) {
+            this.positionCacheCounter = 0;
+            this.cpuPositionsPending = true;
+            this.buffers.readBuffer('node-positions', this.nodeCount * 16).then(data => {
+                this.cpuPositions = data;
+                this.cpuPositionsPending = false;
+                this.boundaryRendererInstance?.updateFromPositions(data, this.nodeCount, this.renderParams.nodeBaseSize);
+            });
+        }
+        if (this.hullRendererInstance && (this.draggedNodeIndex !== null || this.simParams.energy > 0.05)) {
+            this.hullRendererInstance.forceRecompute();
+        }
+        try {
+            this.render();
+        }
+        catch (e) {
+            // GPU validation errors (device lost, stale texture, etc.) — stop the
+            // loop instead of spamming 250 identical console errors per second.
+            console.error('WebGPU render error — stopping render loop:', e);
+            this.running = false;
+            return;
+        }
+        requestAnimationFrame(this.tick);
+    };
+    render() {
+        const { device, context, canvas } = this.gpu;
+        // Skip frame if canvas has no pixels (container hidden / not laid out)
+        if (canvas.width === 0 || canvas.height === 0)
+            return;
+        if (this.cameraBuffer && this.camera.version !== this.lastCameraVersion) {
+            this.lastCameraVersion = this.camera.version;
+            device.queue.writeBuffer(this.cameraBuffer, 0, this.camera.getProjection());
+        }
+        if (this.paramsBuffer) {
+            this.renderParamsArray[0] = this.renderParams.nodeBaseSize;
+            this.renderParamsArray[1] = this.camera.getViewportWidth();
+            this.renderParamsArray[2] = this.camera.getViewportHeight();
+            this.renderParamsArray[3] = this.renderParams.nodeDarkMode ? 1.0 : 0.0;
+            device.queue.writeBuffer(this.paramsBuffer, 0, this.renderParamsArray);
+        }
+        const texture = context.getCurrentTexture();
+        if (texture.width === 0 || texture.height === 0)
+            return;
+        const textureView = texture.createView();
+        const bg = this.renderParams.backgroundColor;
+        const commandEncoder = device.createCommandEncoder();
+        const renderPass = commandEncoder.beginRenderPass({
+            colorAttachments: [{
+                    view: textureView,
+                    clearValue: { r: bg[0], g: bg[1], b: bg[2], a: bg[3] },
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                }],
+        });
+        // Boundary circle (behind everything)
+        if (this.boundaryRendererInstance) {
+            this.boundaryRendererInstance.render(renderPass);
+        }
+        if (this.hullRendererInstance && this.renderParams.hullAlpha > 0) {
+            this.hullRendererInstance.render(renderPass, this.renderParams, this.cpuPositions);
+        }
+        if (this.edgeRendererInstance && this.renderParams.edgeOpacity > 0) {
+            this.edgeRendererInstance.render(renderPass, this.renderParams);
+        }
+        if (this.nodeRenderPipeline && this.nodeBindGroup && this.nodeCount > 0) {
+            renderPass.setPipeline(this.nodeRenderPipeline);
+            renderPass.setBindGroup(0, this.nodeBindGroup);
+            renderPass.draw(this.nodeCount * 6);
+        }
+        renderPass.end();
+        device.queue.submit([commandEncoder.finish()]);
+    }
+    // ── Internal: neighborhood selection (default click behavior) ──
+    applySelection() {
+        if (!this.graphData || !this.buffers.hasBuffer('node-metadata'))
+            return;
+        if (this.selectedNode === null) {
+            this.visibleNodes = null;
+            const metadata = new Uint32Array(this.nodeCount * 2);
+            for (let i = 0; i < this.nodeCount; i++) {
+                metadata[i * 2] = this.graphData.nodes[i].group;
+                metadata[i * 2 + 1] = 0;
+            }
+            this.buffers.uploadData('node-metadata', metadata);
+            if (this.edgeRendererInstance) {
+                this.edgeRendererInstance.setVisibleEdges(this.graphData, null);
+            }
+            if (this.hullRendererInstance) {
+                this.hullRendererInstance.setVisibleEdges(null);
+            }
+        }
+        else {
+            const visibleEdges = new Set();
+            const visibleNodes = new Set();
+            visibleNodes.add(this.selectedNode);
+            for (const he of this.graphData.hyperedges) {
+                if (he.memberIndices.includes(this.selectedNode)) {
+                    visibleEdges.add(he.index);
+                    for (const idx of he.memberIndices) {
+                        visibleNodes.add(idx);
+                    }
+                }
+            }
+            this.visibleNodes = visibleNodes;
+            const metadata = new Uint32Array(this.nodeCount * 2);
+            for (let i = 0; i < this.nodeCount; i++) {
+                metadata[i * 2] = this.graphData.nodes[i].group;
+                metadata[i * 2 + 1] = visibleNodes.has(i) ? 0 : 1;
+            }
+            this.buffers.uploadData('node-metadata', metadata);
+            if (this.edgeRendererInstance) {
+                this.edgeRendererInstance.setVisibleEdges(this.graphData, visibleEdges);
+            }
+            if (this.hullRendererInstance) {
+                this.hullRendererInstance.setVisibleEdges(visibleEdges);
+            }
+        }
+        if (this.tooltip) {
+            this.tooltip.hide();
+            this.lastHoveredEdge = null;
+        }
+    }
+    // ── Internal: hyperedge buffer upload ──
+    uploadHyperedgeBuffers(data) {
+        const offsets = new Uint32Array(data.hyperedges.length + 1);
+        let totalMembers = 0;
+        for (let i = 0; i < data.hyperedges.length; i++) {
+            offsets[i] = totalMembers;
+            totalMembers += data.hyperedges[i].memberIndices.length;
+        }
+        offsets[data.hyperedges.length] = totalMembers;
+        const members = new Uint32Array(totalMembers);
+        let offset = 0;
+        for (const he of data.hyperedges) {
+            for (const idx of he.memberIndices) {
+                members[offset++] = idx;
+            }
+        }
+        this.buffers.createBuffer('he-offsets', offsets.byteLength, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'he-offsets');
+        this.buffers.uploadData('he-offsets', offsets);
+        this.buffers.createBuffer('he-members', Math.max(members.byteLength, 4), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, 'he-members');
+        if (members.byteLength > 0) {
+            this.buffers.uploadData('he-members', members);
+        }
+    }
+    // ── Internal: hit testing ──
+    hitTestEdge(worldX, worldY) {
+        return this.hullRendererInstance?.hitTest(worldX, worldY, this.renderParams.hullMode) ?? null;
+    }
+    hitTestNode(worldX, worldY) {
+        if (!this.cpuPositions || this.nodeCount === 0)
+            return null;
+        const hitRadius = (this.renderParams.nodeBaseSize * 1.5) / this.camera.zoom;
+        let bestDist = hitRadius;
+        let bestIndex = null;
+        for (let i = 0; i < this.nodeCount; i++) {
+            if (this.visibleNodes !== null && !this.visibleNodes.has(i))
+                continue;
+            const nx = this.cpuPositions[i * 4];
+            const ny = this.cpuPositions[i * 4 + 1];
+            const dx = worldX - nx;
+            const dy = worldY - ny;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
+    }
+}

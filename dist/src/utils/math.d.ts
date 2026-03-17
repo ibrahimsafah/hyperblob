@@ -1,0 +1,15 @@
+export type Vec2 = [number, number];
+export declare function vec2Add(a: Vec2, b: Vec2): Vec2;
+export declare function vec2Sub(a: Vec2, b: Vec2): Vec2;
+export declare function vec2Scale(v: Vec2, s: number): Vec2;
+export declare function vec2Length(v: Vec2): number;
+export declare function vec2Normalize(v: Vec2): Vec2;
+export declare function vec2Dot(a: Vec2, b: Vec2): number;
+export declare function vec2Cross(a: Vec2, b: Vec2): number;
+export declare function vec2Lerp(a: Vec2, b: Vec2, t: number): Vec2;
+export declare function vec2Distance(a: Vec2, b: Vec2): number;
+export type Mat4 = Float32Array;
+export declare function mat4Identity(): Mat4;
+export declare function mat4Ortho(left: number, right: number, bottom: number, top: number, near: number, far: number): Mat4;
+export declare function mat4Multiply(a: Mat4, b: Mat4): Mat4;
+export declare function mat4Inverse(m: Mat4): Mat4 | null;
